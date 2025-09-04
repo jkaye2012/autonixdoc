@@ -5,10 +5,46 @@ use std::{
     process::{Command, Stdio},
 };
 
-#[cfg(test)]
-use tempfile;
-
 use anyhow::{anyhow, Context, Result};
+use typed_builder::TypedBuilder;
+
+#[derive(TypedBuilder)]
+struct Nixdoc<'a> {
+    category: &'a str,
+    description: &'a str,
+    file: &'a str,
+    #[builder(default, setter(strip_option))]
+    prefix: Option<&'a str>,
+    #[builder(default, setter(strip_option))]
+    anchor_prefix: Option<&'a str>,
+}
+
+impl<'a> Into<Command> for Nixdoc<'a> {
+    fn into(self) -> Command {
+        let mut command = Command::new("nixdoc");
+        command
+            .arg("--category")
+            .arg(self.category)
+            .arg("--description")
+            .arg(self.description)
+            .arg("--file")
+            .arg(self.file);
+        if let Some(prefix) = self.prefix {
+            command.arg("--prefix").arg(prefix);
+        }
+        if let Some(anchor) = self.anchor_prefix {
+            command.arg("--anchor-prefix").arg(anchor);
+        }
+
+        command
+    }
+}
+
+impl<'a> Nixdoc<'a> {
+    pub fn into_command(self) -> Command {
+        self.into()
+    }
+}
 
 pub fn mirror_path(source_path: &Path, source_base: &Path, dest_base: &Path) -> Result<PathBuf> {
     let source_dir = source_path
@@ -29,21 +65,21 @@ pub fn mirror_path(source_path: &Path, source_base: &Path, dest_base: &Path) -> 
         .with_extension("md"))
 }
 
-pub struct Nixdoc<'a> {
+pub struct AutoNixdoc<'a> {
     prefix: &'a str,
     anchor_prefix: &'a str,
     input_root: &'a Path,
     output_root: &'a Path,
 }
 
-impl<'a> Nixdoc<'a> {
+impl<'a> AutoNixdoc<'a> {
     pub fn new(
         prefix: &'a str,
         anchor_prefix: &'a str,
         input_root: &'a Path,
         output_root: &'a Path,
     ) -> Self {
-        Nixdoc {
+        AutoNixdoc {
             prefix,
             anchor_prefix,
             input_root,
@@ -53,12 +89,13 @@ impl<'a> Nixdoc<'a> {
 
     pub fn execute<P: AsRef<Path>>(&self, path_ref: P) -> Result<()> {
         let path = path_ref.as_ref();
-        let category = path
-            .file_stem()
-            .with_context(|| "source path had no file name")?;
         let path_str = path
             .to_str()
             .with_context(|| "source path was not valid unicode")?;
+        let category = path
+            .file_stem()
+            .and_then(std::ffi::OsStr::to_str) // We know this will succeed because of the conversion above
+            .with_context(|| "source path had no file name")?;
 
         let dest_path = mirror_path(&path, self.input_root, self.output_root)?;
         if let Some(parent) = dest_path.parent() {
@@ -81,17 +118,16 @@ impl<'a> Nixdoc<'a> {
             .with_context(|| format!("Failed to read input file: {}", path_str))?
             .unwrap_or_default();
 
-        let output = Command::new("nixdoc")
-            .arg("--file")
-            .arg(path_str)
-            .arg("--prefix")
-            .arg(self.prefix)
-            .arg("--anchor-prefix")
-            .arg(self.anchor_prefix)
-            .arg("--category")
-            .arg(category)
-            .arg("--description")
-            .arg(desc)
+        let nixdoc = Nixdoc::builder()
+            .file(path_str)
+            .category(category)
+            .description(&desc)
+            .prefix(self.prefix)
+            .anchor_prefix(self.anchor_prefix)
+            .build();
+
+        let output = nixdoc
+            .into_command()
             .stdout(Stdio::from(dest_file))
             .output()
             .with_context(|| "nixdoc command execution failed")?;
@@ -273,7 +309,7 @@ mod tests {
         let test_nix_file = input_dir.join("test-lib.nix");
         fs::write(&test_nix_file, TEST_NIX_CONTENT).unwrap();
 
-        let nixdoc = Nixdoc::new("lib", "lib-", &input_dir, &output_dir);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", &input_dir, &output_dir);
 
         let result = nixdoc.execute(&test_nix_file);
 
@@ -309,7 +345,7 @@ mod tests {
 
         let nonexistent_file = input_dir.join("nonexistent.nix");
 
-        let nixdoc = Nixdoc::new("lib", "lib-", &input_dir, &output_dir);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", &input_dir, &output_dir);
         let result = nixdoc.execute(&nonexistent_file);
 
         assert!(result.is_err());
@@ -334,7 +370,7 @@ mod tests {
         let invalid_utf8 = OsStr::from_bytes(&[0x66, 0x6f, 0x6f, 0x80, 0x2e, 0x6e, 0x69, 0x78]); // "foo<invalid>.nix"
         let invalid_file = input_dir.join(invalid_utf8);
 
-        let nixdoc = Nixdoc::new("lib", "lib-", &input_dir, &output_dir);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", &input_dir, &output_dir);
         let result = nixdoc.execute(&invalid_file);
 
         assert!(result.is_err());
@@ -363,7 +399,7 @@ mod tests {
         let test_nix_file = input_dir.join("test.nix");
         fs::write(&test_nix_file, "# Test file\n# Description\n{ lib }: {}").unwrap();
 
-        let nixdoc = Nixdoc::new("lib", "lib-", &input_dir, &output_dir);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", &input_dir, &output_dir);
         let result = nixdoc.execute(&test_nix_file);
 
         // Restore permissions for cleanup
@@ -393,7 +429,7 @@ mod tests {
         let empty_file = input_dir.join("empty.nix");
         fs::write(&empty_file, "").unwrap();
 
-        let nixdoc = Nixdoc::new("lib", "lib-", &input_dir, &output_dir);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", &input_dir, &output_dir);
         let result = nixdoc.execute(&empty_file);
 
         match result {
@@ -403,5 +439,121 @@ mod tests {
             }
             Err(e) => panic!("Unexpected error: {}", e),
         }
+    }
+
+    #[test]
+    fn test_nixdoc_command_basic() {
+        let nixdoc = Nixdoc::builder()
+            .category("test-category")
+            .description("test description")
+            .file("test-file.nix")
+            .build();
+
+        let command = nixdoc.into_command();
+        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+        let program = command.get_program();
+
+        assert_eq!(program, "nixdoc");
+        assert_eq!(args.len(), 6);
+        assert_eq!(args[0], "--category");
+        assert_eq!(args[1], "test-category");
+        assert_eq!(args[2], "--description");
+        assert_eq!(args[3], "test description");
+        assert_eq!(args[4], "--file");
+        assert_eq!(args[5], "test-file.nix");
+    }
+
+    #[test]
+    fn test_nixdoc_command_with_prefix() {
+        let nixdoc = Nixdoc::builder()
+            .category("lib")
+            .description("Library functions")
+            .file("lib.nix")
+            .prefix("mylib")
+            .build();
+
+        let command = nixdoc.into_command();
+        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+
+        assert_eq!(args.len(), 8);
+        assert_eq!(args[6], "--prefix");
+        assert_eq!(args[7], "mylib");
+    }
+
+    #[test]
+    fn test_nixdoc_command_with_anchor_prefix() {
+        let nixdoc = Nixdoc::builder()
+            .category("utils")
+            .description("Utility functions")
+            .file("utils.nix")
+            .anchor_prefix("util-")
+            .build();
+
+        let command = nixdoc.into_command();
+        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+
+        assert_eq!(args.len(), 8);
+        assert_eq!(args[6], "--anchor-prefix");
+        assert_eq!(args[7], "util-");
+    }
+
+    #[test]
+    fn test_nixdoc_command_with_all_options() {
+        let nixdoc = Nixdoc::builder()
+            .category("full")
+            .description("Full test")
+            .file("full.nix")
+            .prefix("test-prefix")
+            .anchor_prefix("test-anchor-")
+            .build();
+
+        let command = nixdoc.into_command();
+        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+
+        assert_eq!(args.len(), 10);
+        assert_eq!(args[0], "--category");
+        assert_eq!(args[1], "full");
+        assert_eq!(args[2], "--description");
+        assert_eq!(args[3], "Full test");
+        assert_eq!(args[4], "--file");
+        assert_eq!(args[5], "full.nix");
+        assert_eq!(args[6], "--prefix");
+        assert_eq!(args[7], "test-prefix");
+        assert_eq!(args[8], "--anchor-prefix");
+        assert_eq!(args[9], "test-anchor-");
+    }
+
+    #[test]
+    fn test_nixdoc_command_empty_strings() {
+        let nixdoc = Nixdoc::builder()
+            .category("")
+            .description("")
+            .file("")
+            .build();
+
+        let command = nixdoc.into_command();
+        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+
+        assert_eq!(args.len(), 6);
+        assert_eq!(args[1], "");
+        assert_eq!(args[3], "");
+        assert_eq!(args[5], "");
+    }
+
+    #[test]
+    fn test_nixdoc_into_trait() {
+        let nixdoc = Nixdoc::builder()
+            .category("trait-test")
+            .description("Testing Into trait")
+            .file("trait.nix")
+            .build();
+
+        let command: Command = nixdoc.into();
+        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+
+        assert_eq!(command.get_program(), "nixdoc");
+        assert_eq!(args[1], "trait-test");
+        assert_eq!(args[3], "Testing Into trait");
+        assert_eq!(args[5], "trait.nix");
     }
 }

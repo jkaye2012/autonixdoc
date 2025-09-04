@@ -4,6 +4,9 @@
 { lib }:
 
 {
+  /**
+    A simple option
+  */
   simpleOption =
     default: description:
     lib.mkOption {
