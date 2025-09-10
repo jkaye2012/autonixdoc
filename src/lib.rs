@@ -1,1 +1,2 @@
+mod mapping;
 mod nixdoc;

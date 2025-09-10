@@ -1,12 +1,16 @@
+//! Handlers for invocation of external `nixdoc` commands.
+
 use std::{
     fs::File,
     io::{BufRead, BufReader},
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, Stdio},
 };
 
 use anyhow::{anyhow, Context, Result};
 use typed_builder::TypedBuilder;
+
+use crate::mapping::PathMapping;
 
 /// Builder for creating nixdoc commands.
 ///
@@ -58,68 +62,41 @@ impl<'a> Nixdoc<'a> {
     }
 }
 
-fn mirror_path(source_path: &Path, source_base: &Path, dest_base: &Path) -> Result<PathBuf> {
-    let source_dir = source_path
-        .parent()
-        .with_context(|| "source path had no parent")?;
-    let relative_path = source_dir
-        .strip_prefix(source_base)
-        .expect("Source directory isn't a prefix of source path? Please report this, it's a bug");
-
-    let source_stem = source_path
-        .file_stem()
-        .with_context(|| "source path had no file name")?;
-
-    Ok(dest_base
-        .to_path_buf()
-        .join(relative_path)
-        .join(source_stem)
-        .with_extension("md"))
-}
-
 /// Automated nixdoc documentation generator.
 ///
 /// This struct provides high-level automation for generating nixdoc documentation
 /// from source files. It handles the complete workflow from reading source files
-/// to generating markdown documentation.
-pub struct AutoNixdoc<'a> {
+/// to generating markdown documentation using a configurable path mapping strategy.
+pub struct AutoNixdoc<'a, M: PathMapping> {
     /// Prefix for generated identifiers
     prefix: &'a str,
     /// Prefix for anchor links in documentation
     anchor_prefix: &'a str,
-    /// Root directory of the source files
-    input_root: &'a Path,
-    /// Root directory for documentation output
-    output_root: &'a Path,
+    /// Path mapping strategy for determining output locations
+    mapper: M,
 }
 
-impl<'a> AutoNixdoc<'a> {
+impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
     /// Creates a new AutoNixdoc instance.
     ///
     /// # Arguments
     ///
     /// * `prefix` - Prefix for generated identifiers in the documentation
     /// * `anchor_prefix` - Prefix for anchor links in the generated documentation
-    /// * `input_root` - Root directory containing the source files to document
-    /// * `output_root` - Root directory where documentation will be written
-    pub fn new(
-        prefix: &'a str,
-        anchor_prefix: &'a str,
-        input_root: &'a Path,
-        output_root: &'a Path,
-    ) -> Self {
+    /// * `mapper` - Path mapping strategy for determining output file locations
+    pub fn new(prefix: &'a str, anchor_prefix: &'a str, mapper: M) -> Self {
         AutoNixdoc {
-            prefix,
-            anchor_prefix,
-            input_root,
-            output_root,
+            prefix: prefix.into(),
+            anchor_prefix: anchor_prefix.into(),
+            mapper,
         }
     }
 
     /// Generates documentation for a single source file.
     ///
     /// This function processes a source file and generates corresponding markdown
-    /// documentation using nixdoc.
+    /// documentation using nixdoc. The output location is determined by the
+    /// configured path mapping strategy.
     ///
     /// # Arguments
     ///
@@ -130,6 +107,7 @@ impl<'a> AutoNixdoc<'a> {
     /// Returns an error if:
     ///
     /// - The source path contains invalid Unicode
+    /// - The path mapping fails
     /// - The source file cannot be read
     /// - The output directory cannot be created
     /// - The nixdoc command fails
@@ -143,7 +121,10 @@ impl<'a> AutoNixdoc<'a> {
             .and_then(std::ffi::OsStr::to_str) // We know this will succeed because of the conversion above
             .with_context(|| "source path had no file name")?;
 
-        let dest_path = mirror_path(&path, self.input_root, self.output_root)?;
+        let dest_path = self
+            .mapper
+            .resolve(path)
+            .with_context(|| "path mapping failed")?;
         if let Some(parent) = dest_path.parent() {
             std::fs::create_dir_all(&parent).with_context(|| {
                 format!(
@@ -168,8 +149,8 @@ impl<'a> AutoNixdoc<'a> {
             .file(path_str)
             .category(category)
             .description(&desc)
-            .prefix(self.prefix)
-            .anchor_prefix(self.anchor_prefix)
+            .prefix(&self.prefix)
+            .anchor_prefix(&self.anchor_prefix)
             .build();
 
         let output = nixdoc
@@ -191,171 +172,36 @@ impl<'a> AutoNixdoc<'a> {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::{anyhow, Result};
+    use std::{
+        ffi::OsStr, fs, os::unix::ffi::OsStrExt, os::unix::fs::PermissionsExt, path::PathBuf,
+    };
+    use tempfile::TempDir;
+
     use super::*;
-    use std::path::PathBuf;
+    use crate::mapping::{AutoMapping, PathMapping};
 
-    #[test]
-    fn test_mirror_path_absolute_basic() {
-        let source_path = PathBuf::from("/src/lib/module.nix");
-        let source_base = PathBuf::from("/src");
-        let dest_base = PathBuf::from("/docs");
-
-        let result = mirror_path(&source_path, &source_base, &dest_base).unwrap();
-        let expected = PathBuf::from("/docs/lib/module.md");
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_mirror_path_absolute_nested() {
-        let source_path = PathBuf::from("/project/src/deep/nested/file.nix");
-        let source_base = PathBuf::from("/project/src");
-        let dest_base = PathBuf::from("/output");
-
-        let result = mirror_path(&source_path, &source_base, &dest_base).unwrap();
-        let expected = PathBuf::from("/output/deep/nested/file.md");
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_mirror_path_absolute_root_level() {
-        let source_path = PathBuf::from("/src/default.nix");
-        let source_base = PathBuf::from("/src");
-        let dest_base = PathBuf::from("/docs");
-
-        let result = mirror_path(&source_path, &source_base, &dest_base).unwrap();
-        let expected = PathBuf::from("/docs/default.md");
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_mirror_path_relative_basic() {
-        let source_path = PathBuf::from("src/lib/module.nix");
-        let source_base = PathBuf::from("src");
-        let dest_base = PathBuf::from("docs");
-
-        let result = mirror_path(&source_path, &source_base, &dest_base).unwrap();
-        let expected = PathBuf::from("docs/lib/module.md");
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_mirror_path_relative_nested() {
-        let source_path = PathBuf::from("project/src/deep/nested/file.nix");
-        let source_base = PathBuf::from("project/src");
-        let dest_base = PathBuf::from("output");
-
-        let result = mirror_path(&source_path, &source_base, &dest_base).unwrap();
-        let expected = PathBuf::from("output/deep/nested/file.md");
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_mirror_path_relative_root_level() {
-        let source_path = PathBuf::from("src/default.nix");
-        let source_base = PathBuf::from("src");
-        let dest_base = PathBuf::from("docs");
-
-        let result = mirror_path(&source_path, &source_base, &dest_base).unwrap();
-        let expected = PathBuf::from("docs/default.md");
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_mirror_path_mixed_absolute_relative() {
-        let source_path = PathBuf::from("/absolute/src/file.nix");
-        let source_base = PathBuf::from("/absolute/src");
-        let dest_base = PathBuf::from("relative/docs");
-
-        let result = mirror_path(&source_path, &source_base, &dest_base).unwrap();
-        let expected = PathBuf::from("relative/docs/file.md");
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_mirror_path_no_parent_error() {
-        let source_path = PathBuf::from("/");
-        let source_base = PathBuf::from("/src");
-        let dest_base = PathBuf::from("/docs");
-
-        let result = mirror_path(&source_path, &source_base, &dest_base);
-
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "source path had no parent");
-    }
-
-    #[test]
-    fn test_mirror_path_no_file_stem_error() {
-        let source_path = PathBuf::from("/src/..");
-        let source_base = PathBuf::from("/src");
-        let dest_base = PathBuf::from("/docs");
-
-        let result = mirror_path(&source_path, &source_base, &dest_base);
-
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "source path had no file name"
-        );
-    }
-
-    #[test]
-    fn test_can_use_current_directory() {
-        let source_path = PathBuf::from("./example.nix");
-        let source_base = PathBuf::from(".");
-        let dest_base = PathBuf::from("docs/");
-
-        let result = mirror_path(&source_path, &source_base, &dest_base).unwrap();
-        assert_eq!(result, PathBuf::from("docs/example.md"));
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "Source directory isn't a prefix of source path? Please report this, it's a bug"
-    )]
-    fn test_mirror_path_invalid_prefix_panic() {
-        let source_path = PathBuf::from("/other/lib/module.nix");
-        let source_base = PathBuf::from("/src");
-        let dest_base = PathBuf::from("/docs");
-
-        let _ = mirror_path(&source_path, &source_base, &dest_base);
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "Source directory isn't a prefix of source path? Please report this, it's a bug"
-    )]
-    fn test_mirror_path_relative_invalid_prefix_panic() {
-        let source_path = PathBuf::from("other/lib/module.nix");
-        let source_base = PathBuf::from("src");
-        let dest_base = PathBuf::from("docs");
-
-        let _ = mirror_path(&source_path, &source_base, &dest_base);
+    /// Test utility for setting up temporary directories
+    fn setup_test_dirs() -> (TempDir, PathBuf, PathBuf) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_path = temp_dir.path();
+        let input_dir = temp_path.join("input");
+        let output_dir = temp_path.join("output");
+        fs::create_dir_all(&input_dir).unwrap();
+        (temp_dir, input_dir, output_dir)
     }
 
     #[test]
     fn test_nixdoc_execute_success() {
-        use std::fs;
-
         const TEST_NIX_CONTENT: &str = include_str!("../resources/test-lib.nix");
 
-        let temp_dir = tempfile::tempdir().unwrap();
-        let temp_path = temp_dir.path();
-
-        let input_dir = temp_path.join("input");
-        let output_dir = temp_path.join("output");
-        fs::create_dir_all(&input_dir).unwrap();
+        let (_temp_dir, input_dir, output_dir) = setup_test_dirs();
 
         let test_nix_file = input_dir.join("test-lib.nix");
         fs::write(&test_nix_file, TEST_NIX_CONTENT).unwrap();
 
-        let nixdoc = AutoNixdoc::new("lib", "lib-", &input_dir, &output_dir);
+        let mapping = AutoMapping::new(&input_dir, &output_dir);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", mapping);
 
         let result = nixdoc.execute(&test_nix_file);
 
@@ -380,18 +226,12 @@ mod tests {
 
     #[test]
     fn test_nixdoc_execute_nonexistent_file() {
-        use std::fs;
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let temp_path = temp_dir.path();
-
-        let input_dir = temp_path.join("input");
-        let output_dir = temp_path.join("output");
-        fs::create_dir_all(&input_dir).unwrap();
+        let (_temp_dir, input_dir, output_dir) = setup_test_dirs();
 
         let nonexistent_file = input_dir.join("nonexistent.nix");
 
-        let nixdoc = AutoNixdoc::new("lib", "lib-", &input_dir, &output_dir);
+        let mapping = AutoMapping::new(&input_dir, &output_dir);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", mapping);
         let result = nixdoc.execute(&nonexistent_file);
 
         assert!(result.is_err());
@@ -401,22 +241,14 @@ mod tests {
 
     #[test]
     fn test_nixdoc_execute_invalid_unicode_path() {
-        use std::ffi::OsStr;
-        use std::fs;
-        use std::os::unix::ffi::OsStrExt;
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let temp_path = temp_dir.path();
-
-        let input_dir = temp_path.join("input");
-        let output_dir = temp_path.join("output");
-        fs::create_dir_all(&input_dir).unwrap();
+        let (_temp_dir, input_dir, output_dir) = setup_test_dirs();
 
         // Create a path with invalid UTF-8
         let invalid_utf8 = OsStr::from_bytes(&[0x66, 0x6f, 0x6f, 0x80, 0x2e, 0x6e, 0x69, 0x78]); // "foo<invalid>.nix"
         let invalid_file = input_dir.join(invalid_utf8);
 
-        let nixdoc = AutoNixdoc::new("lib", "lib-", &input_dir, &output_dir);
+        let mapping = AutoMapping::new(&input_dir, &output_dir);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", mapping);
         let result = nixdoc.execute(&invalid_file);
 
         assert!(result.is_err());
@@ -426,12 +258,8 @@ mod tests {
 
     #[test]
     fn test_nixdoc_execute_read_only_output_directory() {
-        use std::fs;
-        use std::os::unix::fs::PermissionsExt;
-
         let temp_dir = tempfile::tempdir().unwrap();
         let temp_path = temp_dir.path();
-
         let input_dir = temp_path.join("input");
         let output_dir = temp_path.join("readonly_output");
         fs::create_dir_all(&input_dir).unwrap();
@@ -445,7 +273,8 @@ mod tests {
         let test_nix_file = input_dir.join("test.nix");
         fs::write(&test_nix_file, "# Test file\n# Description\n{ lib }: {}").unwrap();
 
-        let nixdoc = AutoNixdoc::new("lib", "lib-", &input_dir, &output_dir);
+        let mapping = AutoMapping::new(&input_dir, &output_dir);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", mapping);
         let result = nixdoc.execute(&test_nix_file);
 
         // Restore permissions for cleanup
@@ -463,19 +292,13 @@ mod tests {
 
     #[test]
     fn test_nixdoc_execute_empty_file() {
-        use std::fs;
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let temp_path = temp_dir.path();
-
-        let input_dir = temp_path.join("input");
-        let output_dir = temp_path.join("output");
-        fs::create_dir_all(&input_dir).unwrap();
+        let (_temp_dir, input_dir, output_dir) = setup_test_dirs();
 
         let empty_file = input_dir.join("empty.nix");
         fs::write(&empty_file, "").unwrap();
 
-        let nixdoc = AutoNixdoc::new("lib", "lib-", &input_dir, &output_dir);
+        let mapping = AutoMapping::new(&input_dir, &output_dir);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", mapping);
         let result = nixdoc.execute(&empty_file);
 
         match result {
@@ -485,6 +308,31 @@ mod tests {
             }
             Err(e) => panic!("Unexpected error: {}", e),
         }
+    }
+
+    #[test]
+    fn test_nixdoc_execute_path_mapping_failure() {
+        struct FailingMapper;
+
+        impl PathMapping for FailingMapper {
+            fn resolve(&self, _path: &Path) -> Result<PathBuf> {
+                Err(anyhow!("Mock path mapping failure"))
+            }
+        }
+
+        let (_temp_dir, input_dir, _output_dir) = setup_test_dirs();
+
+        let test_file = input_dir.join("test.nix");
+        fs::write(&test_file, "# Test file\n# Description\n{ lib }: {}").unwrap();
+
+        let failing_mapper = FailingMapper;
+        let nixdoc = AutoNixdoc::new("lib", "lib-", failing_mapper);
+        let result = nixdoc.execute(&test_file);
+
+        assert!(result.is_err());
+        let error_msg = format!("{:?}", result.unwrap_err());
+        assert!(error_msg.contains("path mapping failed"));
+        assert!(error_msg.contains("Mock path mapping failure"));
     }
 
     #[test]
