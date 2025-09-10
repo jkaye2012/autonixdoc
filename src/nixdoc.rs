@@ -8,13 +8,22 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use typed_builder::TypedBuilder;
 
+/// Builder for creating nixdoc commands.
+///
+/// This struct encapsulates the parameters needed to build a nixdoc command.
+/// Use the builder pattern to construct instances and convert them to executable commands.
 #[derive(TypedBuilder)]
 struct Nixdoc<'a> {
+    /// The category name for the documentation
     category: &'a str,
+    /// Description text for the documentation
     description: &'a str,
+    /// Path to the source file to document
     file: &'a str,
+    /// Optional prefix for generated identifiers
     #[builder(default, setter(strip_option))]
     prefix: Option<&'a str>,
+    /// Optional prefix for anchor links
     #[builder(default, setter(strip_option))]
     anchor_prefix: Option<&'a str>,
 }
@@ -41,12 +50,15 @@ impl<'a> Into<Command> for Nixdoc<'a> {
 }
 
 impl<'a> Nixdoc<'a> {
+    /// Converts this Nixdoc instance into a Command ready for execution.
+    ///
+    /// This is a convenience function that delegates to the `Into<Command>` trait.
     pub fn into_command(self) -> Command {
         self.into()
     }
 }
 
-pub fn mirror_path(source_path: &Path, source_base: &Path, dest_base: &Path) -> Result<PathBuf> {
+fn mirror_path(source_path: &Path, source_base: &Path, dest_base: &Path) -> Result<PathBuf> {
     let source_dir = source_path
         .parent()
         .with_context(|| "source path had no parent")?;
@@ -65,14 +77,31 @@ pub fn mirror_path(source_path: &Path, source_base: &Path, dest_base: &Path) -> 
         .with_extension("md"))
 }
 
+/// Automated nixdoc documentation generator.
+///
+/// This struct provides high-level automation for generating nixdoc documentation
+/// from source files. It handles the complete workflow from reading source files
+/// to generating markdown documentation.
 pub struct AutoNixdoc<'a> {
+    /// Prefix for generated identifiers
     prefix: &'a str,
+    /// Prefix for anchor links in documentation
     anchor_prefix: &'a str,
+    /// Root directory of the source files
     input_root: &'a Path,
+    /// Root directory for documentation output
     output_root: &'a Path,
 }
 
 impl<'a> AutoNixdoc<'a> {
+    /// Creates a new AutoNixdoc instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `prefix` - Prefix for generated identifiers in the documentation
+    /// * `anchor_prefix` - Prefix for anchor links in the generated documentation
+    /// * `input_root` - Root directory containing the source files to document
+    /// * `output_root` - Root directory where documentation will be written
     pub fn new(
         prefix: &'a str,
         anchor_prefix: &'a str,
@@ -87,6 +116,23 @@ impl<'a> AutoNixdoc<'a> {
         }
     }
 
+    /// Generates documentation for a single source file.
+    ///
+    /// This function processes a source file and generates corresponding markdown
+    /// documentation using nixdoc.
+    ///
+    /// # Arguments
+    ///
+    /// * `path_ref` - Path to the source file to document
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// - The source path contains invalid Unicode
+    /// - The source file cannot be read
+    /// - The output directory cannot be created
+    /// - The nixdoc command fails
     pub fn execute<P: AsRef<Path>>(&self, path_ref: P) -> Result<()> {
         let path = path_ref.as_ref();
         let path_str = path

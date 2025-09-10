@@ -86,3 +86,7 @@ the _specific_ functionality that they're testing.
 
 Whenever _any_ changes are made to the project, always verify that tests are passing by running
 `cargo test` as the last step of your todo list.
+
+When adding documentation, always follow Rustdoc best practices. Focus on the _what_ and _why_,
+never the how. Do not include frivolous implementation details in generated documentation. Always
+use the words "struct", "function", and "trait"; never "class", "method", or "interface".
