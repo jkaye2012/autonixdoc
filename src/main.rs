@@ -1,6 +1,7 @@
-use std::{io::Write, process::Command};
+use anyhow::Result;
+use autonixdoc::cli::Driver;
+use clap::Parser;
 
-fn main() {
-    let output = Command::new("nixdoc").arg("--help").output().unwrap();
-    std::io::stdout().write_all(&output.stdout).unwrap();
+fn main() -> Result<()> {
+    Driver::parse().run()
 }
