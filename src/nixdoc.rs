@@ -98,6 +98,11 @@ impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
     /// documentation using nixdoc. The output location is determined by the
     /// configured path mapping strategy.
     ///
+    /// Note that depending on the behavior of the mapping strategy, it's possible
+    /// for this function to return successfully without generation output documentation.
+    /// This would be the case if e.g. a mapping strategy decides that a specific
+    /// source file should be ignored.
+    ///
     /// # Arguments
     ///
     /// * `path_ref` - Path to the source file to document
@@ -121,10 +126,19 @@ impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
             .and_then(std::ffi::OsStr::to_str) // We know this will succeed because of the conversion above
             .with_context(|| "source path had no file name")?;
 
-        let dest_path = self
+        let maybe_dest_path = self
             .mapper
-            .resolve(path)
+            .resolve(&Default::default(), path)
             .with_context(|| "path mapping failed")?;
+
+        // There's definitely room for improvement here; could use an enum with a
+        // handling strategy rather than relying on the binary state of an option
+        // to decide what to do with the mapped path
+        if maybe_dest_path.is_none() {
+            return Ok(());
+        }
+        let dest_path = maybe_dest_path.unwrap();
+
         if let Some(parent) = dest_path.parent() {
             std::fs::create_dir_all(&parent).with_context(|| {
                 format!(
@@ -315,7 +329,9 @@ mod tests {
         struct FailingMapper;
 
         impl PathMapping for FailingMapper {
-            fn resolve(&self, _path: &Path) -> Result<PathBuf> {
+            type Config = ();
+
+            fn resolve(&self, _config: &Self::Config, _path: &Path) -> Result<Option<PathBuf>> {
                 Err(anyhow!("Mock path mapping failure"))
             }
         }
