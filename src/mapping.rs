@@ -7,14 +7,26 @@ use std::{
 
 use anyhow::{Context, Result};
 
-/// Maps input paths (Nix files) to output paths (documentation markdown files).
+/// Actions that can be performed with a mapped path.
+///
+/// In most cases, the path action will describe how output documentation (markdown files)
+/// should be stored on disk.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PathAction {
+    /// Documentation should be output to the mapped path
+    OutputTo(PathBuf),
+    /// The path should be skipped
+    Skip,
+}
+
+/// Maps input paths (Nix files) to output [path actions](PathAction).
 ///
 /// Path mapping allows implementation of different strategies for documentation
 /// structure.
 pub trait PathMapping {
     type Config: Default;
 
-    fn resolve(&self, config: &Self::Config, nix_path: &Path) -> Result<Option<PathBuf>>;
+    fn resolve(&self, config: &Self::Config, nix_path: &Path) -> Result<PathAction>;
 }
 
 /// Mirrors source file paths to corresponding documentation paths.
@@ -51,9 +63,9 @@ pub struct AutoMappingConfig {
 impl<'a> PathMapping for AutoMapping<'a> {
     type Config = AutoMappingConfig;
 
-    fn resolve(&self, config: &Self::Config, source_path: &Path) -> Result<Option<PathBuf>> {
+    fn resolve(&self, config: &Self::Config, source_path: &Path) -> Result<PathAction> {
         if config.ignore_paths.contains(source_path) {
-            return Ok(None);
+            return Ok(PathAction::Skip);
         }
 
         let source_dir = source_path
@@ -67,7 +79,7 @@ impl<'a> PathMapping for AutoMapping<'a> {
             .file_stem()
             .with_context(|| "source path had no file name")?;
 
-        Ok(Some(
+        Ok(PathAction::OutputTo(
             self.dest_base
                 .to_path_buf()
                 .join(relative_path)
@@ -92,7 +104,7 @@ mod tests {
         let result = mapping.resolve(&Default::default(), &source_path).unwrap();
         let expected = PathBuf::from("/docs/lib/module.md");
 
-        assert_eq!(result.unwrap(), expected);
+        assert_eq!(result, PathAction::OutputTo(expected));
     }
 
     #[test]
@@ -105,7 +117,7 @@ mod tests {
         let result = mapping.resolve(&Default::default(), &source_path).unwrap();
         let expected = PathBuf::from("/output/deep/nested/file.md");
 
-        assert_eq!(result.unwrap(), expected);
+        assert_eq!(result, PathAction::OutputTo(expected));
     }
 
     #[test]
@@ -118,7 +130,7 @@ mod tests {
         let result = mapping.resolve(&Default::default(), &source_path).unwrap();
         let expected = PathBuf::from("/docs/default.md");
 
-        assert_eq!(result.unwrap(), expected);
+        assert_eq!(result, PathAction::OutputTo(expected));
     }
 
     #[test]
@@ -131,7 +143,7 @@ mod tests {
         let result = mapping.resolve(&Default::default(), &source_path).unwrap();
         let expected = PathBuf::from("docs/lib/module.md");
 
-        assert_eq!(result.unwrap(), expected);
+        assert_eq!(result, PathAction::OutputTo(expected));
     }
 
     #[test]
@@ -144,7 +156,7 @@ mod tests {
         let result = mapping.resolve(&Default::default(), &source_path).unwrap();
         let expected = PathBuf::from("output/deep/nested/file.md");
 
-        assert_eq!(result.unwrap(), expected);
+        assert_eq!(result, PathAction::OutputTo(expected));
     }
 
     #[test]
@@ -157,7 +169,7 @@ mod tests {
         let result = mapping.resolve(&Default::default(), &source_path).unwrap();
         let expected = PathBuf::from("docs/default.md");
 
-        assert_eq!(result.unwrap(), expected);
+        assert_eq!(result, PathAction::OutputTo(expected));
     }
 
     #[test]
@@ -170,7 +182,7 @@ mod tests {
         let result = mapping.resolve(&Default::default(), &source_path).unwrap();
         let expected = PathBuf::from("relative/docs/file.md");
 
-        assert_eq!(result.unwrap(), expected);
+        assert_eq!(result, PathAction::OutputTo(expected));
     }
 
     #[test]
@@ -210,7 +222,10 @@ mod tests {
 
         let mapping = AutoMapping::new(&source_base, &dest_base);
         let result = mapping.resolve(&Default::default(), &source_path).unwrap();
-        assert_eq!(result, Some(PathBuf::from("docs/example.md")));
+        assert_eq!(
+            result,
+            PathAction::OutputTo(PathBuf::from("docs/example.md"))
+        );
     }
 
     #[test]
@@ -251,7 +266,7 @@ mod tests {
         let mapping = AutoMapping::new(&source_base, &dest_base);
         let result = mapping.resolve(&config, &source_path).unwrap();
 
-        assert_eq!(result, None);
+        assert_eq!(result, PathAction::Skip);
     }
 
     #[test]
@@ -269,13 +284,16 @@ mod tests {
         let mapping = AutoMapping::new(&source_base, &dest_base);
 
         let result1 = mapping.resolve(&config, &source_path1).unwrap();
-        assert_eq!(result1, None);
+        assert_eq!(result1, PathAction::Skip);
 
         let result2 = mapping.resolve(&config, &source_path2).unwrap();
-        assert_eq!(result2, Some(PathBuf::from("/docs/lib/module2.md")));
+        assert_eq!(
+            result2,
+            PathAction::OutputTo(PathBuf::from("/docs/lib/module2.md"))
+        );
 
         let result3 = mapping.resolve(&config, &source_path3).unwrap();
-        assert_eq!(result3, None);
+        assert_eq!(result3, PathAction::Skip);
     }
 
     #[test]
@@ -290,7 +308,7 @@ mod tests {
         let mapping = AutoMapping::new(&source_base, &dest_base);
         let result = mapping.resolve(&config, &source_path).unwrap();
 
-        assert_eq!(result, None);
+        assert_eq!(result, PathAction::Skip);
     }
 
     #[test]
@@ -307,7 +325,7 @@ mod tests {
         let result = mapping.resolve(&config, &normal_path).unwrap();
         let expected = PathBuf::from("/docs/lib/normal.md");
 
-        assert_eq!(result.unwrap(), expected);
+        assert_eq!(result, PathAction::OutputTo(expected));
     }
 
     #[test]
@@ -323,12 +341,12 @@ mod tests {
         let mapping = AutoMapping::new(&source_base, &dest_base);
 
         let ignored_result = mapping.resolve(&config, &ignored_path).unwrap();
-        assert_eq!(ignored_result, None);
+        assert_eq!(ignored_result, PathAction::Skip);
 
         let normal_result = mapping.resolve(&config, &normal_path).unwrap();
         assert_eq!(
             normal_result,
-            Some(PathBuf::from("/output/deep/nested/normal.md"))
+            PathAction::OutputTo(PathBuf::from("/output/deep/nested/normal.md"))
         );
     }
 }

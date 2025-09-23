@@ -3,14 +3,14 @@
 use std::{
     fs::File,
     io::{BufRead, BufReader},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
 use anyhow::{anyhow, Context, Result};
 use typed_builder::TypedBuilder;
 
-use crate::mapping::PathMapping;
+use crate::mapping::{PathAction, PathMapping};
 
 /// Builder for creating nixdoc commands.
 ///
@@ -118,6 +118,19 @@ impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
     /// - The nixdoc command fails
     pub fn execute<P: AsRef<Path>>(&self, path_ref: P) -> Result<()> {
         let path = path_ref.as_ref();
+
+        let path_action = self
+            .mapper
+            .resolve(&Default::default(), path)
+            .with_context(|| "path mapping failed")?;
+
+        match path_action {
+            PathAction::Skip => Ok(()),
+            PathAction::OutputTo(dest_path) => self.output_to(path, dest_path),
+        }
+    }
+
+    fn output_to(&self, path: &Path, dest_path: PathBuf) -> Result<()> {
         let path_str = path
             .to_str()
             .with_context(|| "source path was not valid unicode")?;
@@ -125,20 +138,6 @@ impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
             .file_stem()
             .and_then(std::ffi::OsStr::to_str) // We know this will succeed because of the conversion above
             .with_context(|| "source path had no file name")?;
-
-        let maybe_dest_path = self
-            .mapper
-            .resolve(&Default::default(), path)
-            .with_context(|| "path mapping failed")?;
-
-        // There's definitely room for improvement here; could use an enum with a
-        // handling strategy rather than relying on the binary state of an option
-        // to decide what to do with the mapped path
-        if maybe_dest_path.is_none() {
-            return Ok(());
-        }
-        let dest_path = maybe_dest_path.unwrap();
-
         if let Some(parent) = dest_path.parent() {
             std::fs::create_dir_all(&parent).with_context(|| {
                 format!(
@@ -331,7 +330,7 @@ mod tests {
         impl PathMapping for FailingMapper {
             type Config = ();
 
-            fn resolve(&self, _config: &Self::Config, _path: &Path) -> Result<Option<PathBuf>> {
+            fn resolve(&self, _config: &Self::Config, _path: &Path) -> Result<PathAction> {
                 Err(anyhow!("Mock path mapping failure"))
             }
         }
