@@ -121,6 +121,7 @@ impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
 
         let path_action = self
             .mapper
+            // Next: resolve configuration files and pass in here
             .resolve(&Default::default(), path)
             .with_context(|| "path mapping failed")?;
 
@@ -233,7 +234,7 @@ mod tests {
                     "Output file should contain module description"
                 );
             }
-            Err(e) => panic!("Unexpected error: {}", e),
+            Err(e) => panic!("Unexpected error: {:?}", e),
         }
     }
 
@@ -319,7 +320,7 @@ mod tests {
             Err(e) if e.to_string().contains("nixdoc command error") => {
                 println!("nixdoc command failed on empty file, which is expected behavior");
             }
-            Err(e) => panic!("Unexpected error: {}", e),
+            Err(e) => panic!("Unexpected error: {:?}", e),
         }
     }
 

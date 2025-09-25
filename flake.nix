@@ -29,13 +29,22 @@
         fenix' = fenix.packages.${system};
         crane' = (crane.mkLib pkgs).overrideToolchain fenix'.complete.toolchain;
         manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
-        src = crane'.cleanCargoSource ./.;
+        resourceFilter = path: _type: builtins.match ".*nix$" path != null;
+        customFilter = path: type: (resourceFilter path type) || (crane'.filterCargoSources path type);
+        src = pkgs.lib.cleanSourceWith {
+          src = ./.;
+          filter = customFilter;
+          name = "source";
+        };
 
         project = devenv.lib.rust.createProject {
           inherit src;
 
           name = "autonixdoc";
           crane = crane';
+          args = {
+            nativeBuildInputs = [ pkgs.nixdoc ];
+          };
         };
       in
       {

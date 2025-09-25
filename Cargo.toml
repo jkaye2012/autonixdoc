@@ -8,6 +8,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.99"
 clap = { version = "4.5.47", features = ["derive"] }
+toml = { version = "0.9.7", features = ["parse", "serde"] }
 typed-builder = "0.21.2"
 
 [dev-dependencies]
