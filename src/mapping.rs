@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, de::DeserializeOwned};
 
 use crate::cli::MappingType;
 
@@ -26,7 +27,7 @@ pub enum PathAction {
 /// Path mapping allows implementation of different strategies for documentation
 /// structure.
 pub trait PathMapping {
-    type Config: Default;
+    type Config: Default + DeserializeOwned;
 
     fn resolve(&self, config: &Self::Config, nix_path: &Path) -> Result<PathAction>;
 }
@@ -78,7 +79,7 @@ impl<'a> AutoMapping<'a> {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Deserialize)]
 pub struct AutoMappingConfig {
     pub ignore_paths: HashSet<PathBuf>,
 }

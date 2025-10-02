@@ -116,13 +116,12 @@ impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
     /// - The source file cannot be read
     /// - The output directory cannot be created
     /// - The nixdoc command fails
-    pub fn execute<P: AsRef<Path>>(&self, path_ref: P) -> Result<()> {
+    pub fn execute<P: AsRef<Path>>(&self, config: &M::Config, path_ref: P) -> Result<()> {
         let path = path_ref.as_ref();
 
         let path_action = self
             .mapper
-            // Next: resolve configuration files and pass in here
-            .resolve(&Default::default(), path)
+            .resolve(config, path)
             .with_context(|| "path mapping failed")?;
 
         match path_action {
@@ -218,7 +217,7 @@ mod tests {
         let mapping = AutoMapping::new(&input_dir, &output_dir);
         let nixdoc = AutoNixdoc::new("lib", "lib-", mapping);
 
-        let result = nixdoc.execute(&test_nix_file);
+        let result = nixdoc.execute(&Default::default(), &test_nix_file);
 
         match result {
             Ok(()) => {
@@ -247,7 +246,7 @@ mod tests {
 
         let mapping = AutoMapping::new(&input_dir, &output_dir);
         let nixdoc = AutoNixdoc::new("lib", "lib-", mapping);
-        let result = nixdoc.execute(&nonexistent_file);
+        let result = nixdoc.execute(&Default::default(), &nonexistent_file);
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
@@ -264,7 +263,7 @@ mod tests {
 
         let mapping = AutoMapping::new(&input_dir, &output_dir);
         let nixdoc = AutoNixdoc::new("lib", "lib-", mapping);
-        let result = nixdoc.execute(&invalid_file);
+        let result = nixdoc.execute(&Default::default(), &invalid_file);
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
@@ -290,7 +289,7 @@ mod tests {
 
         let mapping = AutoMapping::new(&input_dir, &output_dir);
         let nixdoc = AutoNixdoc::new("lib", "lib-", mapping);
-        let result = nixdoc.execute(&test_nix_file);
+        let result = nixdoc.execute(&Default::default(), &test_nix_file);
 
         // Restore permissions for cleanup
         let mut perms = fs::metadata(&output_dir).unwrap().permissions();
@@ -314,7 +313,7 @@ mod tests {
 
         let mapping = AutoMapping::new(&input_dir, &output_dir);
         let nixdoc = AutoNixdoc::new("lib", "lib-", mapping);
-        let result = nixdoc.execute(&empty_file);
+        let result = nixdoc.execute(&Default::default(), &empty_file);
 
         match result {
             Ok(()) => panic!("Nixdoc execution should've failed"),
@@ -344,7 +343,7 @@ mod tests {
 
         let failing_mapper = FailingMapper;
         let nixdoc = AutoNixdoc::new("lib", "lib-", failing_mapper);
-        let result = nixdoc.execute(&test_file);
+        let result = nixdoc.execute(&Default::default(), &test_file);
 
         assert!(result.is_err());
         let error_msg = format!("{:?}", result.unwrap_err());
