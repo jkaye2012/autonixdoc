@@ -7,7 +7,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use typed_builder::TypedBuilder;
 
 use crate::mapping::{PathAction, PathMapping};
@@ -152,6 +152,7 @@ impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
 
         let file = File::open(path)?;
         let reader = BufReader::new(file);
+        // TODO: description extraction strategy?
         let desc = reader
             .lines()
             .nth(1)
@@ -186,7 +187,7 @@ impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::{anyhow, Result};
+    use anyhow::{Result, anyhow};
     use std::{
         ffi::OsStr, fs, os::unix::ffi::OsStrExt, os::unix::fs::PermissionsExt, path::PathBuf,
     };

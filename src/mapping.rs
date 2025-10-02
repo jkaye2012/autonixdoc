@@ -7,6 +7,8 @@ use std::{
 
 use anyhow::{Context, Result};
 
+use crate::cli::MappingType;
+
 /// Actions that can be performed with a mapped path.
 ///
 /// In most cases, the path action will describe how output documentation (markdown files)
@@ -29,6 +31,26 @@ pub trait PathMapping {
     fn resolve(&self, config: &Self::Config, nix_path: &Path) -> Result<PathAction>;
 }
 
+/// Constructs a [PathMapping].
+///
+/// # Arguments
+///
+/// * `mapping_type` - The type of path mapping to create
+/// * `source_base` - The base directory of the source files
+/// * `dest_base` - The base directory for documentation output
+pub fn get_mapping<'a>(
+    mapping_type: MappingType,
+    source_base: &'a Path,
+    dest_base: &'a Path,
+) -> Result<impl PathMapping> {
+    match mapping_type {
+        MappingType::Auto => Ok(AutoMapping {
+            source_base,
+            dest_base,
+        }),
+    }
+}
+
 /// Mirrors source file paths to corresponding documentation paths.
 ///
 /// This implementation transforms source paths by preserving the directory
@@ -47,6 +69,7 @@ impl<'a> AutoMapping<'a> {
     ///
     /// * `source_base` - The base directory of the source tree
     /// * `dest_base` - The base directory for the documentation output
+    #[cfg(test)]
     pub fn new(source_base: &'a Path, dest_base: &'a Path) -> Self {
         AutoMapping {
             source_base,
