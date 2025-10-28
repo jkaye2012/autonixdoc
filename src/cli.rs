@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
+use ignore::Walk;
+use log::{LevelFilter, info};
 
 use crate::{
     mapping::{PathMapping, get_mapping},
@@ -43,6 +45,17 @@ pub struct Driver {
     /// The configuration file that should be used to customize mapping-dependent functionality
     #[arg(short, long)]
     config: Option<PathBuf>,
+
+    /// The level of logging to enable
+    ///
+    /// Possible values:
+    /// - info: all messages
+    /// - warn: warning and error messages only
+    /// - error: error messages only
+    ///
+    /// [default: warn]
+    #[arg(short, long, verbatim_doc_comment)]
+    logging_level: Option<LevelFilter>,
 }
 
 // TODO: implement configuration file, environment variables
@@ -50,31 +63,67 @@ pub struct Driver {
 // TODO: Initial documentation
 
 fn resolve_option<T: From<String>>(cli_value: Option<T>, env_key: &str) -> Option<T> {
-    cli_value.or_else(|| std::env::var(env_key).map(|v| v.into()).ok())
+    cli_value.or_else(|| std::env::var(env_key).map(Into::into).ok())
 }
 
 mod env_vars {
     pub const CONFIG: &'static str = "AUTONIXDOC_CONFIG";
     pub const FAILURE_MODE: &'static str = "AUTONIXDOC_FAILURE_MODE";
-    pub const LOGGING_MODE: &'static str = "AUTONIXDOC_LOGGING_MODE";
 }
 
-// TODO: add context to all errors in Driver functions
+mod constants {
+    pub const DEFAULT_CONFIG_PATH: &'static str = "autonixdoc.toml";
+}
 
 impl Driver {
     pub fn run(self) -> Result<()> {
-        let mapping = get_mapping(self.mapping, &self.input_dir, &self.output_dir)?;
-        let config = Self::resolve_config(&mapping, resolve_option(self.config, env_vars::CONFIG))?;
+        self.initialize_logging();
+
+        let mapping = get_mapping(self.mapping, &self.input_dir, &self.output_dir);
+        let config = Self::resolve_config(&mapping, resolve_option(self.config, env_vars::CONFIG))
+            .with_context(|| "Failed to resolve configuration file")?;
         // TODO: prefix extraction, can default to empty
         let autonixdoc = AutoNixdoc::new("", "", mapping);
         Self::run_in_path(&autonixdoc, &config, &self.input_dir)
     }
 
-    fn resolve_config<M: PathMapping>(_mapping: &M, path: Option<PathBuf>) -> Result<M::Config> {
-        if let Some(path) = path {
-            let config = std::fs::read_to_string(&path)?;
-            Ok(toml::from_str(&config)?)
+    fn initialize_logging(&self) {
+        if let Some(level) = self.logging_level {
+            env_logger::builder().filter_level(level).init();
         } else {
+            env_logger::init();
+        }
+    }
+
+    fn resolve_config<M: PathMapping>(_mapping: &M, path: Option<PathBuf>) -> Result<M::Config> {
+        let default_config = PathBuf::from(constants::DEFAULT_CONFIG_PATH);
+
+        if let Some(path) = path {
+            info!(
+                "Attempting to load user-provided configuration at {}",
+                path.display()
+            );
+
+            let config = std::fs::read_to_string(&path)
+                .with_context(|| "Failed to read configuration file from user-provided path")?;
+            Ok(toml::from_str(&config).with_context(
+                || "Failed to parse user-provided configuration file as valid TOML",
+            )?)
+        } else if let Ok(exists) = std::fs::exists(&default_config)
+            && exists
+        {
+            info!(
+                "Attempting to load default configuration at {}",
+                default_config.display()
+            );
+
+            let config = std::fs::read_to_string(&default_config).with_context(
+                || "A configuration file exists at the default path, but cannot be read",
+            )?;
+            Ok(toml::from_str(&config)
+                .with_context(|| "Failed to parse default configuration file as valid TOML")?)
+        } else {
+            info!("No configuration found, falling back to defaults");
             Ok(Default::default())
         }
     }
@@ -85,18 +134,20 @@ impl Driver {
         path: &Path,
     ) -> Result<()> {
         // TODO: failure handling; don't have to abort immediately on failure if the user doesn't want to
-        for entry in std::fs::read_dir(path)? {
-            let path = entry?.path();
+        for entry in Walk::new(path) {
+            let path = entry
+                .with_context(|| "Failed to list directory")?
+                .into_path();
 
-            if path.is_dir() {
-                Self::run_in_path(&autonixdoc, &config, &path)?;
-            } else if let Some(ex) = path.extension()
+            if !path.is_dir()
+                && let Some(ex) = path.extension()
                 && ex.to_str() == Some("nix")
             // TODO: path identification strategy?
             {
+                info!("Generating documentation for {}", path.display());
                 autonixdoc.execute(config, &path)?;
             } else {
-                // TODO: logging strategy? Logging in general?
+                info!("Skipping uninteresting path {}", path.display());
             }
         }
 

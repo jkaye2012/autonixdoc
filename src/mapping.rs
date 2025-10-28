@@ -43,12 +43,12 @@ pub fn get_mapping<'a>(
     mapping_type: MappingType,
     source_base: &'a Path,
     dest_base: &'a Path,
-) -> Result<impl PathMapping> {
+) -> impl PathMapping {
     match mapping_type {
-        MappingType::Auto => Ok(AutoMapping {
+        MappingType::Auto => AutoMapping {
             source_base,
             dest_base,
-        }),
+        },
     }
 }
 
