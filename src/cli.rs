@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use ignore::Walk;
-use log::{LevelFilter, info};
+use log::{LevelFilter, error, info, warn};
 
 use crate::{
     mapping::{PathMapping, get_mapping},
@@ -18,6 +18,32 @@ use crate::{
 pub enum MappingType {
     /// Automatic mapping
     Auto,
+}
+
+/// How individual nixdoc generation failures should be handled.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum, Default)]
+pub enum FailureBehavior {
+    /// Any individual failure should result in the generation process aborting immediately.
+    Abort,
+    /// Individual failures should not abort the generation process, but should print an error.
+    #[default]
+    Log,
+    /// Individual failures should be ignored entirely.
+    Skip,
+}
+
+impl From<String> for FailureBehavior {
+    fn from(s: String) -> Self {
+        match s.to_lowercase().as_str() {
+            "abort" => Self::Abort,
+            "log" => Self::Log,
+            "skip" => Self::Skip,
+            _ => {
+                warn!("Unknown failure behavior {}, defaulting to log", s);
+                Self::Log
+            }
+        }
+    }
 }
 
 /// Automatically generates nixdoc documentation for a library tree
@@ -42,6 +68,10 @@ pub struct Driver {
     #[arg(short, long, value_enum, default_value_t = MappingType::Auto)]
     mapping: MappingType,
 
+    /// The desired behavior upon encountering individual failures
+    #[arg(short = 'f', long, value_enum)]
+    on_failure: Option<FailureBehavior>,
+
     /// The configuration file that should be used to customize mapping-dependent functionality
     #[arg(short, long)]
     config: Option<PathBuf>,
@@ -58,7 +88,6 @@ pub struct Driver {
     logging_level: Option<LevelFilter>,
 }
 
-// TODO: implement configuration file, environment variables
 // TODO: Implement another mapper to demonstrate how it works
 // TODO: Initial documentation
 
@@ -68,7 +97,19 @@ fn resolve_option<T: From<String>>(cli_value: Option<T>, env_key: &str) -> Optio
 
 mod env_vars {
     pub const CONFIG: &'static str = "AUTONIXDOC_CONFIG";
-    pub const FAILURE_MODE: &'static str = "AUTONIXDOC_FAILURE_MODE";
+    pub const ON_FAILURE: &'static str = "AUTONIXDOC_ON_FAILURE";
+}
+
+struct Behaviors {
+    on_failure: FailureBehavior,
+}
+
+impl Behaviors {
+    fn new(on_failure: Option<FailureBehavior>) -> Self {
+        Self {
+            on_failure: on_failure.unwrap_or_default(),
+        }
+    }
 }
 
 mod constants {
@@ -80,11 +121,15 @@ impl Driver {
         self.initialize_logging();
 
         let mapping = get_mapping(self.mapping, &self.input_dir, &self.output_dir);
-        let config = Self::resolve_config(&mapping, resolve_option(self.config, env_vars::CONFIG))
-            .with_context(|| "Failed to resolve configuration file")?;
+        let config = Self::resolve_config(
+            &mapping,
+            resolve_option(self.config.clone(), env_vars::CONFIG),
+        )
+        .with_context(|| "Failed to resolve configuration file")?;
+        let behaviors = Behaviors::new(resolve_option(self.on_failure, env_vars::ON_FAILURE));
         // TODO: prefix extraction, can default to empty
         let autonixdoc = AutoNixdoc::new("", "", mapping);
-        Self::run_in_path(&autonixdoc, &config, &self.input_dir)
+        self.run_in_path(&autonixdoc, &config, &behaviors, &self.input_dir)
     }
 
     fn initialize_logging(&self) {
@@ -129,15 +174,26 @@ impl Driver {
     }
 
     fn run_in_path<'a, M: PathMapping>(
+        &self,
         autonixdoc: &AutoNixdoc<'a, M>,
         config: &M::Config,
+        behaviors: &Behaviors,
         path: &Path,
     ) -> Result<()> {
-        // TODO: failure handling; don't have to abort immediately on failure if the user doesn't want to
         for entry in Walk::new(path) {
-            let path = entry
-                .with_context(|| "Failed to list directory")?
-                .into_path();
+            let path = match entry {
+                Ok(entry) => entry.into_path(),
+                Err(e) => match behaviors.on_failure {
+                    FailureBehavior::Abort => {
+                        return Err(e).with_context(|| "Failed to list directory");
+                    }
+                    FailureBehavior::Log => {
+                        error!("Failed to list directory: {}", e);
+                        continue;
+                    }
+                    FailureBehavior::Skip => continue,
+                },
+            };
 
             if !path.is_dir()
                 && let Some(ex) = path.extension()
@@ -145,7 +201,28 @@ impl Driver {
             // TODO: path identification strategy?
             {
                 info!("Generating documentation for {}", path.display());
-                autonixdoc.execute(config, &path)?;
+                let exec_result = autonixdoc.execute(config, &path);
+                if let Err(e) = exec_result {
+                    match behaviors.on_failure {
+                        FailureBehavior::Abort => {
+                            return Err(e).with_context(|| {
+                                format!(
+                                    "Documentation generation failed for file {}",
+                                    path.display()
+                                )
+                            });
+                        }
+                        FailureBehavior::Log => {
+                            error!(
+                                "Failed to generate documentation for {}: {}",
+                                path.display(),
+                                e
+                            );
+                            continue;
+                        }
+                        FailureBehavior::Skip => continue,
+                    }
+                }
             } else {
                 info!("Skipping uninteresting path {}", path.display());
             }
