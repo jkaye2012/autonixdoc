@@ -61,6 +61,9 @@ nix build
 - **src/main.rs**: Entry point that currently demonstrates nixdoc usage
 - **src/lib.rs**: Library module declarations
 - **src/nixdoc.rs**: Core nixdoc functionality module
+- **src/mapping.rs**: Path mapping abstractions
+- **src/cli.rs**: Command-line management, including flags, configuration files, and environment
+  variables
 - **flake.nix**: Nix flake defining the build and development environment using crane, fenix, and
   custom devenv
 
@@ -82,6 +85,14 @@ implementations to be tested. Tests should be written both for happy-path and fa
 possible. Mocks should never be used unless explicitly requested. Tests should always be named after
 the _specific_ functionality that they're testing.
 
+Integration tests should be added as separate binaries in the `tests/` subdirectory. Use this type
+of test only when specifically prompted to do so.
+
+Test assertions should be made as specific as possible to ensure that functionality is working as
+expected. For example, rather than only asserting that an operation is successful, inspect the
+result of the operation to ensure that it is consistent with the expectations of the functionality
+in question.
+
 ## Making Changes
 
 Whenever _any_ changes are made to the project, always verify that tests are passing by running
@@ -90,3 +101,6 @@ Whenever _any_ changes are made to the project, always verify that tests are pas
 When adding documentation, always follow Rustdoc best practices. Focus on the _what_ and _why_,
 never the how. Do not include frivolous implementation details in generated documentation. Always
 use the words "struct", "function", and "trait"; never "class", "method", or "interface".
+
+When making changes, add comments only if they are explaining _why_ something is done. Comments that
+say _what_ code does are not useful. When in doubt, do not add a comment.

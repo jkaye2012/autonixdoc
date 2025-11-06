@@ -27,6 +27,21 @@ fn cli_command() -> Command {
     cargo_bin_cmd!("autonixdoc")
 }
 
+fn count_files_recursive(dir: &Path) -> usize {
+    let mut count = 0;
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                count += 1;
+            } else if path.is_dir() {
+                count += count_files_recursive(&path);
+            }
+        }
+    }
+    count
+}
+
 #[test]
 fn test_successful_documentation_generation() {
     let (_temp_dir, input_dir, output_dir) = create_test_directory();
@@ -53,6 +68,13 @@ fn test_successful_documentation_generation() {
         "Expected output file {:?} does not exist",
         expected_output_file
     );
+
+    let file_content =
+        fs::read_to_string(&expected_output_file).expect("Failed to read output file");
+    assert!(
+        !file_content.trim().is_empty(),
+        "Output file should contain documentation content"
+    );
 }
 
 #[test]
@@ -71,10 +93,13 @@ fn test_empty_directory_handling() {
 
     let output_entries: Vec<_> = fs::read_dir(&output_dir)
         .expect("Failed to read output directory")
-        .collect();
-    assert!(
-        output_entries.is_empty(),
-        "Output directory should be empty when no .nix files are processed"
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to collect directory entries");
+    assert_eq!(
+        output_entries.len(),
+        0,
+        "Output directory should contain exactly 0 files when no .nix files are processed, found {} entries",
+        output_entries.len()
     );
 }
 
@@ -97,10 +122,22 @@ fn test_non_nix_files_ignored() {
 
     let output_entries: Vec<_> = fs::read_dir(&output_dir)
         .expect("Failed to read output directory")
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to collect directory entries");
+    assert_eq!(
+        output_entries.len(),
+        0,
+        "Output directory should contain exactly 0 files when only non-.nix files are present, found {} entries",
+        output_entries.len()
+    );
+
     assert!(
-        output_entries.is_empty(),
-        "Output directory should be empty when only non-.nix files are present"
+        !output_dir.join("readme.md").exists(),
+        "No .md file should be created for .txt file"
+    );
+    assert!(
+        !output_dir.join("config.md").exists(),
+        "No .md file should be created for .json file"
     );
 }
 
@@ -122,7 +159,15 @@ fn test_failure_behavior_log() {
         .arg("--on-failure")
         .arg("log");
 
-    cmd.assert().success();
+    cmd.assert().success().stderr(
+        predicate::str::contains("Failed to generate documentation").or(predicate::str::is_empty()),
+    );
+
+    let expected_output_file = output_dir.join("invalid.md");
+    assert!(
+        expected_output_file.exists(),
+        "Output file should be created even for invalid .nix files with log behavior"
+    );
 }
 
 #[test]
@@ -149,11 +194,28 @@ fn test_failure_behavior_skip() {
         expected_good_file
     );
 
+    let good_content =
+        fs::read_to_string(&expected_good_file).expect("Failed to read good output file");
+    assert!(
+        !good_content.trim().is_empty(),
+        "Good .nix file should generate non-empty documentation"
+    );
+
     let expected_bad_file = output_dir.join("bad.md");
     assert!(
         expected_bad_file.exists(),
         "Expected output file {:?} does not exist",
         expected_bad_file
+    );
+
+    let output_entries: Vec<_> = fs::read_dir(&output_dir)
+        .expect("Failed to read output directory")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to collect directory entries");
+    assert_eq!(
+        output_entries.len(),
+        2,
+        "Output directory should contain exactly 2 files (good.md and bad.md)"
     );
 }
 
@@ -175,7 +237,29 @@ fn test_failure_behavior_abort() {
         .arg("--on-failure")
         .arg("abort");
 
-    cmd.assert().failure();
+    cmd.assert().failure().code(predicate::ne(0));
+
+    let expected_output_file = output_dir.join("invalid.md");
+    let file_exists = expected_output_file.exists();
+
+    let output_entries: Vec<_> = fs::read_dir(&output_dir)
+        .expect("Failed to read output directory")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to collect directory entries");
+
+    if file_exists {
+        assert_eq!(
+            output_entries.len(),
+            1,
+            "If output file exists with abort behavior, there should be exactly 1 file"
+        );
+    } else {
+        assert_eq!(
+            output_entries.len(),
+            0,
+            "If abort behavior prevents file creation, output directory should be empty"
+        );
+    }
 }
 
 #[test]
@@ -191,6 +275,16 @@ fn test_default_failure_behavior() {
         .arg(&output_dir);
 
     cmd.assert().code(predicate::in_iter([0, 1]));
+
+    let expected_output_file = output_dir.join("test.md");
+    if expected_output_file.exists() {
+        let file_content =
+            fs::read_to_string(&expected_output_file).expect("Failed to read output file");
+        assert!(
+            !file_content.trim().is_empty(),
+            "Output file should contain documentation content when created with default behavior"
+        );
+    }
 }
 
 #[test]
@@ -198,7 +292,7 @@ fn test_config_file_provided() {
     let (_temp_dir, input_dir, output_dir) = create_test_directory();
 
     let config_path = _temp_dir.path().join("custom.toml");
-    fs::write(&config_path, "[ignore_paths]\npaths = []").expect("Failed to write config");
+    fs::write(&config_path, "ignore_paths = []").expect("Failed to write config");
 
     create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
 
@@ -212,7 +306,7 @@ fn test_config_file_provided() {
         .arg("--on-failure")
         .arg("log");
 
-    cmd.assert().code(predicate::in_iter([0, 1]));
+    cmd.assert().success();
 }
 
 #[test]
@@ -232,7 +326,19 @@ fn test_invalid_config_file() {
         .arg("--on-failure")
         .arg("log");
 
-    cmd.assert().failure();
+    cmd.assert().failure().code(predicate::ne(0)).stderr(
+        predicate::str::contains("invalid toml").or(predicate::str::contains("Failed to parse")),
+    );
+
+    let output_entries: Vec<_> = fs::read_dir(&output_dir)
+        .expect("Failed to read output directory")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to collect directory entries");
+    assert_eq!(
+        output_entries.len(),
+        0,
+        "No output files should be created when config file is invalid"
+    );
 }
 
 #[test]
@@ -251,7 +357,22 @@ fn test_nonexistent_config_file() {
         .arg("--on-failure")
         .arg("log");
 
-    cmd.assert().failure();
+    cmd.assert()
+        .failure()
+        .code(predicate::ne(0))
+        .stderr(predicate::str::contains(
+            "Failed to read configuration file",
+        ));
+
+    let output_entries: Vec<_> = fs::read_dir(&output_dir)
+        .expect("Failed to read output directory")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to collect directory entries");
+    assert_eq!(
+        output_entries.len(),
+        0,
+        "No output files should be created when config file does not exist"
+    );
 }
 
 #[test]
@@ -259,7 +380,7 @@ fn test_environment_variable_config_resolution() {
     let (_temp_dir, input_dir, output_dir) = create_test_directory();
 
     let config_path = _temp_dir.path().join("env_config.toml");
-    fs::write(&config_path, "[ignore_paths]\npaths = []").expect("Failed to write config");
+    fs::write(&config_path, "ignore_paths = []").expect("Failed to write config");
 
     create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
 
@@ -275,7 +396,7 @@ fn test_environment_variable_config_resolution() {
     .arg("--on-failure")
     .arg("log");
 
-    cmd.assert().code(predicate::in_iter([0, 1]));
+    cmd.assert().success();
 }
 
 #[test]
@@ -291,7 +412,7 @@ fn test_environment_variable_failure_behavior() {
         .arg("--output-dir")
         .arg(&output_dir);
 
-    cmd.assert().code(predicate::in_iter([0, 1]));
+    cmd.assert().success();
 }
 
 #[test]
@@ -328,9 +449,9 @@ fn test_nonexistent_input_directory() {
         .arg("--output-dir")
         .arg(&output_dir)
         .arg("--on-failure")
-        .arg("log");
+        .arg("abort");
 
-    cmd.assert().code(predicate::in_iter([0, 1]));
+    cmd.assert().failure();
 }
 
 #[test]
@@ -356,7 +477,7 @@ fn test_nested_directory_structure() {
         .arg("--on-failure")
         .arg("log");
 
-    cmd.assert().code(predicate::in_iter([0, 1]));
+    cmd.assert().success();
 
     let expected_root_file = output_dir.join("root.md");
     let expected_sub_file = output_dir.join("subdir").join("sub.md");
@@ -376,6 +497,24 @@ fn test_nested_directory_structure() {
         expected_deep_file.exists(),
         "Expected deep output file {:?} does not exist",
         expected_deep_file
+    );
+
+    let output_subdir = output_dir.join("subdir");
+    assert!(
+        output_subdir.exists() && output_subdir.is_dir(),
+        "Output subdirectory should be created to mirror input structure"
+    );
+
+    let output_deep_dir = output_dir.join("subdir").join("deep");
+    assert!(
+        output_deep_dir.exists() && output_deep_dir.is_dir(),
+        "Output deep subdirectory should be created to mirror input structure"
+    );
+
+    let total_files = count_files_recursive(&output_dir);
+    assert_eq!(
+        total_files, 3,
+        "Output directory should contain exactly 3 .md files total across all subdirectories"
     );
 }
 
