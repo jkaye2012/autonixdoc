@@ -540,3 +540,87 @@ fn test_help_flag() {
 
     cmd.assert().success();
 }
+
+#[test]
+fn test_prefix_cli_arguments() {
+    let (_temp_dir, input_dir, output_dir) = create_test_directory();
+
+    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+
+    let mut cmd = cli_command();
+    cmd.arg("--input-dir")
+        .arg(&input_dir)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg("--prefix")
+        .arg("lib.")
+        .arg("--anchor-prefix")
+        .arg("lib-")
+        .arg("--on-failure")
+        .arg("log");
+
+    cmd.assert().success();
+
+    let expected_output_file = output_dir.join("test.md");
+    assert!(
+        expected_output_file.exists(),
+        "Expected output file {:?} does not exist",
+        expected_output_file
+    );
+}
+
+#[test]
+fn test_prefix_environment_variables() {
+    let (_temp_dir, input_dir, output_dir) = create_test_directory();
+
+    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+
+    let mut cmd = cli_command();
+    cmd.env("AUTONIXDOC_PREFIX", "env.")
+        .env("AUTONIXDOC_ANCHOR_PREFIX", "env-")
+        .arg("--input-dir")
+        .arg(&input_dir)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg("--on-failure")
+        .arg("log");
+
+    cmd.assert().success();
+
+    let expected_output_file = output_dir.join("test.md");
+    assert!(
+        expected_output_file.exists(),
+        "Expected output file {:?} does not exist",
+        expected_output_file
+    );
+}
+
+#[test]
+fn test_prefix_cli_overrides_environment() {
+    let (_temp_dir, input_dir, output_dir) = create_test_directory();
+
+    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+
+    let mut cmd = cli_command();
+    cmd.env("AUTONIXDOC_PREFIX", "env.")
+        .env("AUTONIXDOC_ANCHOR_PREFIX", "env-")
+        .arg("--input-dir")
+        .arg(&input_dir)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg("--prefix")
+        .arg("cli.")
+        .arg("--anchor-prefix")
+        .arg("cli-")
+        .arg("--on-failure")
+        .arg("log");
+
+    cmd.assert().success();
+
+    let expected_output_file = output_dir.join("test.md");
+    assert!(
+        expected_output_file.exists(),
+        "Expected output file {:?} does not exist",
+        expected_output_file
+    );
+}

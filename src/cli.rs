@@ -86,6 +86,14 @@ pub struct Driver {
     /// [default: warn]
     #[arg(short, long, verbatim_doc_comment)]
     logging_level: Option<LevelFilter>,
+
+    /// Prefix for generated identifiers in the documentation
+    #[arg(short, long)]
+    prefix: Option<String>,
+
+    /// Prefix for anchor links in the generated documentation
+    #[arg(short = 'a', long)]
+    anchor_prefix: Option<String>,
 }
 
 // TODO: Implement another mapper to demonstrate how it works
@@ -98,6 +106,8 @@ fn resolve_option<T: From<String>>(cli_value: Option<T>, env_key: &str) -> Optio
 mod env_vars {
     pub const CONFIG: &'static str = "AUTONIXDOC_CONFIG";
     pub const ON_FAILURE: &'static str = "AUTONIXDOC_ON_FAILURE";
+    pub const PREFIX: &'static str = "AUTONIXDOC_PREFIX";
+    pub const ANCHOR_PREFIX: &'static str = "AUTONIXDOC_ANCHOR_PREFIX";
 }
 
 struct Behaviors {
@@ -127,8 +137,12 @@ impl Driver {
         )
         .with_context(|| "Failed to resolve configuration file")?;
         let behaviors = Behaviors::new(resolve_option(self.on_failure, env_vars::ON_FAILURE));
-        // TODO: prefix extraction, can default to empty
-        let autonixdoc = AutoNixdoc::new("", "", mapping);
+
+        let prefix = resolve_option(self.prefix.clone(), env_vars::PREFIX).unwrap_or_default();
+        let anchor_prefix =
+            resolve_option(self.anchor_prefix.clone(), env_vars::ANCHOR_PREFIX).unwrap_or_default();
+
+        let autonixdoc = AutoNixdoc::new(&prefix, &anchor_prefix, mapping);
         self.run_in_path(&autonixdoc, &config, &behaviors, &self.input_dir)
     }
 
