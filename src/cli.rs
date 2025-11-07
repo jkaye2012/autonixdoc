@@ -142,7 +142,7 @@ impl Driver {
         let anchor_prefix =
             resolve_option(self.anchor_prefix.clone(), env_vars::ANCHOR_PREFIX).unwrap_or_default();
 
-        let autonixdoc = AutoNixdoc::new(&prefix, &anchor_prefix, mapping);
+        let autonixdoc = AutoNixdoc::new(&prefix, &anchor_prefix, self.input_dir.clone(), mapping);
         self.run_in_path(&autonixdoc, &config, &behaviors, &self.input_dir)
     }
 

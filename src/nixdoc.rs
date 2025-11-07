@@ -74,6 +74,8 @@ pub struct AutoNixdoc<'a, M: PathMapping> {
     anchor_prefix: &'a str,
     /// Path mapping strategy for determining output locations
     mapper: M,
+    /// Input directory root for computing relative paths
+    input_dir: PathBuf,
 }
 
 impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
@@ -83,12 +85,14 @@ impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
     ///
     /// * `prefix` - Prefix for generated identifiers in the documentation
     /// * `anchor_prefix` - Prefix for anchor links in the generated documentation
+    /// * `input_dir` - Input directory root for computing relative paths in categories
     /// * `mapper` - Path mapping strategy for determining output file locations
-    pub fn new(prefix: &'a str, anchor_prefix: &'a str, mapper: M) -> Self {
+    pub fn new(prefix: &'a str, anchor_prefix: &'a str, input_dir: PathBuf, mapper: M) -> Self {
         AutoNixdoc {
             prefix: prefix.into(),
             anchor_prefix: anchor_prefix.into(),
             mapper,
+            input_dir,
         }
     }
 
@@ -130,14 +134,47 @@ impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
         }
     }
 
+    fn extract_category(&self, path: &Path) -> Result<String> {
+        let relative_path = path
+            .strip_prefix(&self.input_dir)
+            .with_context(|| "source path is not within input directory")?;
+
+        let file_stem = relative_path
+            .file_stem()
+            .and_then(std::ffi::OsStr::to_str)
+            .with_context(|| "source path had no file name")?;
+
+        let parent_components: Vec<&str> = relative_path
+            .parent()
+            .map(|p| {
+                p.components()
+                    .filter_map(|c| {
+                        if let std::path::Component::Normal(os_str) = c {
+                            os_str.to_str()
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let category = if parent_components.is_empty() {
+            file_stem.to_string()
+        } else {
+            format!("{}.{}", parent_components.join("."), file_stem)
+        };
+
+        Ok(category)
+    }
+
     fn output_to(&self, path: &Path, dest_path: PathBuf) -> Result<()> {
         let path_str = path
             .to_str()
             .with_context(|| "source path was not valid unicode")?;
-        let category = path
-            .file_stem()
-            .and_then(std::ffi::OsStr::to_str) // We know this will succeed because of the conversion above
-            .with_context(|| "source path had no file name")?;
+
+        let category = self.extract_category(path)?;
+
         if let Some(parent) = dest_path.parent() {
             std::fs::create_dir_all(&parent).with_context(|| {
                 format!(
@@ -146,6 +183,7 @@ impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
                 )
             })?;
         }
+
         let dest_file = File::create(&dest_path)
             .with_context(|| format!("Failed to create output file: {}", dest_path.display()))?;
 
@@ -161,7 +199,7 @@ impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
 
         let nixdoc = Nixdoc::builder()
             .file(path_str)
-            .category(category)
+            .category(&category)
             .description(&desc)
             .prefix(&self.prefix)
             .anchor_prefix(&self.anchor_prefix)
@@ -215,7 +253,7 @@ mod tests {
         fs::write(&test_nix_file, TEST_NIX_CONTENT).unwrap();
 
         let mapping = AutoMapping::new(&input_dir, &output_dir);
-        let nixdoc = AutoNixdoc::new("lib", "lib-", mapping);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", input_dir.clone(), mapping);
 
         let result = nixdoc.execute(&Default::default(), &test_nix_file);
 
@@ -245,7 +283,7 @@ mod tests {
         let nonexistent_file = input_dir.join("nonexistent.nix");
 
         let mapping = AutoMapping::new(&input_dir, &output_dir);
-        let nixdoc = AutoNixdoc::new("lib", "lib-", mapping);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", input_dir.clone(), mapping);
         let result = nixdoc.execute(&Default::default(), &nonexistent_file);
 
         assert!(result.is_err());
@@ -262,7 +300,7 @@ mod tests {
         let invalid_file = input_dir.join(invalid_utf8);
 
         let mapping = AutoMapping::new(&input_dir, &output_dir);
-        let nixdoc = AutoNixdoc::new("lib", "lib-", mapping);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", input_dir.clone(), mapping);
         let result = nixdoc.execute(&Default::default(), &invalid_file);
 
         assert!(result.is_err());
@@ -288,7 +326,7 @@ mod tests {
         fs::write(&test_nix_file, "# Test file\n# Description\n{ lib }: {}").unwrap();
 
         let mapping = AutoMapping::new(&input_dir, &output_dir);
-        let nixdoc = AutoNixdoc::new("lib", "lib-", mapping);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", input_dir.clone(), mapping);
         let result = nixdoc.execute(&Default::default(), &test_nix_file);
 
         // Restore permissions for cleanup
@@ -312,7 +350,7 @@ mod tests {
         fs::write(&empty_file, "").unwrap();
 
         let mapping = AutoMapping::new(&input_dir, &output_dir);
-        let nixdoc = AutoNixdoc::new("lib", "lib-", mapping);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", input_dir.clone(), mapping);
         let result = nixdoc.execute(&Default::default(), &empty_file);
 
         match result {
@@ -342,7 +380,7 @@ mod tests {
         fs::write(&test_file, "# Test file\n# Description\n{ lib }: {}").unwrap();
 
         let failing_mapper = FailingMapper;
-        let nixdoc = AutoNixdoc::new("lib", "lib-", failing_mapper);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", input_dir.clone(), failing_mapper);
         let result = nixdoc.execute(&Default::default(), &test_file);
 
         assert!(result.is_err());
@@ -465,5 +503,67 @@ mod tests {
         assert_eq!(args[1], "trait-test");
         assert_eq!(args[3], "Testing Into trait");
         assert_eq!(args[5], "trait.nix");
+    }
+
+    #[test]
+    fn test_category_extraction_with_path_components() {
+        const TEST_NIX_CONTENT: &str = include_str!("../resources/test-lib.nix");
+
+        let (_temp_dir, input_dir, output_dir) = setup_test_dirs();
+
+        let subdir = input_dir.join("utils").join("string");
+        fs::create_dir_all(&subdir).unwrap();
+
+        let test_nix_file = subdir.join("helpers.nix");
+        fs::write(&test_nix_file, TEST_NIX_CONTENT).unwrap();
+
+        let mapping = AutoMapping::new(&input_dir, &output_dir);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", input_dir.clone(), mapping);
+
+        nixdoc
+            .execute(&Default::default(), &test_nix_file)
+            .expect("Failed to execute");
+
+        let expected_output = output_dir.join("utils").join("string").join("helpers.md");
+        assert!(expected_output.exists(), "Output file should be created");
+
+        let content = fs::read_to_string(&expected_output).unwrap();
+        assert!(
+            content.contains("lib.utils.string.helpers"),
+            "Output should contain category with path components: lib.utils.string.helpers, but got: {}",
+            content
+        );
+    }
+
+    #[test]
+    fn test_category_extraction_root_file() {
+        const TEST_NIX_CONTENT: &str = include_str!("../resources/test-lib.nix");
+
+        let (_temp_dir, input_dir, output_dir) = setup_test_dirs();
+
+        let test_nix_file = input_dir.join("test-lib.nix");
+        fs::write(&test_nix_file, TEST_NIX_CONTENT).unwrap();
+
+        let mapping = AutoMapping::new(&input_dir, &output_dir);
+        let nixdoc = AutoNixdoc::new("lib", "lib-", input_dir.clone(), mapping);
+
+        nixdoc
+            .execute(&Default::default(), &test_nix_file)
+            .expect("Failed to execute");
+
+        let expected_output = output_dir.join("test-lib.md");
+        assert!(expected_output.exists(), "Output file should be created");
+
+        let content = fs::read_to_string(&expected_output).unwrap();
+        assert!(
+            content.contains("test-lib"),
+            "Output should contain category name derived from filename, but got: {}",
+            content
+        );
+        assert!(
+            content.contains("sec-functions-library-test-lib") || content.contains("test-lib"),
+            "Output should reference the root file category correctly, but got: {}",
+            content
+        );
     }
 }
