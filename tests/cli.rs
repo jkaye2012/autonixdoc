@@ -1,12 +1,11 @@
-use std::fs;
-use std::path::Path;
+use std::{fs, path::{Path, PathBuf}};
 
 use assert_cmd::Command;
 use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-fn create_test_directory() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+fn create_test_directory() -> (TempDir, PathBuf, PathBuf) {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let input_dir = temp_dir.path().join("input");
     let output_dir = temp_dir.path().join("output");
@@ -17,7 +16,7 @@ fn create_test_directory() -> (TempDir, std::path::PathBuf, std::path::PathBuf) 
     (temp_dir, input_dir, output_dir)
 }
 
-fn create_nix_file(dir: &Path, filename: &str, content: &str) -> std::path::PathBuf {
+fn create_nix_file(dir: &Path, filename: &str, content: &str) -> PathBuf {
     let file_path = dir.join(filename);
     fs::write(&file_path, content).expect("Failed to write test file");
     file_path
@@ -614,6 +613,115 @@ fn test_prefix_cli_overrides_environment() {
         .arg("cli-")
         .arg("--on-failure")
         .arg("log");
+
+    cmd.assert().success();
+
+    let expected_output_file = output_dir.join("test.md");
+    assert!(
+        expected_output_file.exists(),
+        "Expected output file {:?} does not exist",
+        expected_output_file
+    );
+}
+
+#[test]
+fn test_config_file_baseline_options() {
+    let (_temp_dir, input_dir, output_dir) = create_test_directory();
+
+    let config_content = r#"
+ignore_paths = []
+failure_behavior = "Log"
+prefix = "config-prefix"
+anchor_prefix = "config-anchor"
+logging_level = "info"
+"#;
+    let config_path = _temp_dir.path().join("baseline.toml");
+    fs::write(&config_path, config_content).expect("Failed to write config");
+
+    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+
+    let mut cmd = cli_command();
+    cmd.arg("--input-dir")
+        .arg(&input_dir)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg("--config")
+        .arg(&config_path);
+
+    cmd.assert().success();
+
+    let expected_output_file = output_dir.join("test.md");
+    assert!(
+        expected_output_file.exists(),
+        "Expected output file {:?} does not exist",
+        expected_output_file
+    );
+}
+
+#[test]
+fn test_cli_overrides_config_baseline() {
+    let (_temp_dir, input_dir, output_dir) = create_test_directory();
+
+    let config_content = r#"
+ignore_paths = []
+failure_behavior = "Abort"
+prefix = "config-prefix"
+anchor_prefix = "config-anchor"
+"#;
+    let config_path = _temp_dir.path().join("override.toml");
+    fs::write(&config_path, config_content).expect("Failed to write config");
+
+    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+
+    let mut cmd = cli_command();
+    cmd.arg("--input-dir")
+        .arg(&input_dir)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--prefix")
+        .arg("cli-prefix")
+        .arg("--anchor-prefix")
+        .arg("cli-anchor")
+        .arg("--on-failure")
+        .arg("log");
+
+    cmd.assert().success();
+
+    let expected_output_file = output_dir.join("test.md");
+    assert!(
+        expected_output_file.exists(),
+        "Expected output file {:?} does not exist",
+        expected_output_file
+    );
+}
+
+#[test]
+fn test_env_overrides_config_baseline() {
+    let (_temp_dir, input_dir, output_dir) = create_test_directory();
+
+    let config_content = r#"
+ignore_paths = []
+failure_behavior = "Abort"
+prefix = "config-prefix"
+anchor_prefix = "config-anchor"
+"#;
+    let config_path = _temp_dir.path().join("env_override.toml");
+    fs::write(&config_path, config_content).expect("Failed to write config");
+
+    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+
+    let mut cmd = cli_command();
+    cmd.env("AUTONIXDOC_PREFIX", "env-prefix")
+        .env("AUTONIXDOC_ANCHOR_PREFIX", "env-anchor")
+        .env("AUTONIXDOC_ON_FAILURE", "log")
+        .arg("--input-dir")
+        .arg(&input_dir)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg("--config")
+        .arg(&config_path);
 
     cmd.assert().success();
 

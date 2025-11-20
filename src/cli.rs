@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use ignore::Walk;
-use log::{LevelFilter, error, info, warn};
+use log::{LevelFilter, error, info};
 
 use crate::{
-    mapping::{PathMapping, get_mapping},
+    mapping::{BaselineConfig, PathMapping, get_mapping},
     nixdoc::AutoNixdoc,
 };
 
@@ -21,7 +21,7 @@ pub enum MappingType {
 }
 
 /// How individual nixdoc generation failures should be handled.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum, Default, serde::Deserialize)]
 pub enum FailureBehavior {
     /// Any individual failure should result in the generation process aborting immediately.
     Abort,
@@ -32,15 +32,44 @@ pub enum FailureBehavior {
     Skip,
 }
 
-impl From<String> for FailureBehavior {
-    fn from(s: String) -> Self {
-        match s.to_lowercase().as_str() {
-            "abort" => Self::Abort,
-            "log" => Self::Log,
-            "skip" => Self::Skip,
+/// A newtype wrapper around LevelFilter to provide From<String> implementation
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct LogLevel(pub LevelFilter);
+
+impl From<LogLevel> for LevelFilter {
+    fn from(log_level: LogLevel) -> Self {
+        log_level.0
+    }
+}
+
+impl std::str::FromStr for LogLevel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let level_filter = match s.to_lowercase().as_str() {
+            "error" => LevelFilter::Error,
+            "warn" => LevelFilter::Warn,
+            "info" => LevelFilter::Info,
+            "debug" => LevelFilter::Debug,
+            "trace" => LevelFilter::Trace,
             _ => {
-                warn!("Unknown failure behavior {}, defaulting to log", s);
-                Self::Log
+                return Err(format!("Unknown logging level: {}", s));
+            }
+        };
+        Ok(LogLevel(level_filter))
+    }
+}
+
+impl std::str::FromStr for FailureBehavior {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "abort" => Ok(Self::Abort),
+            "log" => Ok(Self::Log),
+            "skip" => Ok(Self::Skip),
+            _ => {
+                Err(format!("Unknown failure behavior: {}", s))
             }
         }
     }
@@ -85,7 +114,7 @@ pub struct Driver {
     ///
     /// [default: warn]
     #[arg(short, long, verbatim_doc_comment)]
-    logging_level: Option<LevelFilter>,
+    logging_level: Option<LogLevel>,
 
     /// Prefix for generated identifiers in the documentation
     #[arg(short, long)]
@@ -99,15 +128,37 @@ pub struct Driver {
 // TODO: Implement another mapper to demonstrate how it works
 // TODO: Initial documentation
 
-fn resolve_option<T: From<String>>(cli_value: Option<T>, env_key: &str) -> Option<T> {
-    cli_value.or_else(|| std::env::var(env_key).map(Into::into).ok())
+fn resolve_option<T: std::str::FromStr>(cli_value: Option<T>, env_key: &str) -> Option<T> {
+    cli_value.or_else(|| std::env::var(env_key).ok().and_then(|s| s.parse().ok()))
 }
+
+/// Resolves configuration values with three-tier priority: CLI > environment > config file.
+///
+/// This function implements the priority system where CLI arguments have the highest priority,
+/// followed by environment variables, and finally configuration file values.
+///
+/// # Arguments
+///
+/// * `cli_value` - Value from CLI arguments (highest priority)
+/// * `env_key` - Environment variable key to check
+/// * `config_value` - Value from configuration file (lowest priority)
+fn resolve_with_config<T: std::str::FromStr + Clone>(
+    cli_value: Option<T>,
+    env_key: &str,
+    config_value: Option<T>,
+) -> Option<T> {
+    cli_value
+        .or_else(|| std::env::var(env_key).ok().and_then(|s| s.parse().ok()))
+        .or(config_value)
+}
+
 
 mod env_vars {
     pub const CONFIG: &'static str = "AUTONIXDOC_CONFIG";
     pub const ON_FAILURE: &'static str = "AUTONIXDOC_ON_FAILURE";
     pub const PREFIX: &'static str = "AUTONIXDOC_PREFIX";
     pub const ANCHOR_PREFIX: &'static str = "AUTONIXDOC_ANCHOR_PREFIX";
+    pub const LOGGING_LEVEL: &'static str = "AUTONIXDOC_LOGGING_LEVEL";
 }
 
 struct Behaviors {
@@ -128,27 +179,44 @@ mod constants {
 
 impl Driver {
     pub fn run(self) -> Result<()> {
-        self.initialize_logging();
-
         let mapping = get_mapping(self.mapping, &self.input_dir, &self.output_dir);
         let config = Self::resolve_config(
             &mapping,
             resolve_option(self.config.clone(), env_vars::CONFIG),
         )
         .with_context(|| "Failed to resolve configuration file")?;
-        let behaviors = Behaviors::new(resolve_option(self.on_failure, env_vars::ON_FAILURE));
 
-        let prefix = resolve_option(self.prefix.clone(), env_vars::PREFIX).unwrap_or_default();
-        let anchor_prefix =
-            resolve_option(self.anchor_prefix.clone(), env_vars::ANCHOR_PREFIX).unwrap_or_default();
+        let failure_behavior = resolve_with_config(
+            self.on_failure,
+            env_vars::ON_FAILURE,
+            config.failure_behavior(),
+        );
+        let behaviors = Behaviors::new(failure_behavior);
+
+        let logging_level = resolve_with_config(
+            self.logging_level,
+            env_vars::LOGGING_LEVEL,
+            config.logging_level(),
+        );
+        self.initialize_logging(logging_level);
+
+        let prefix = resolve_with_config(self.prefix.clone(), env_vars::PREFIX, config.prefix())
+            .unwrap_or_default();
+
+        let anchor_prefix = resolve_with_config(
+            self.anchor_prefix.clone(),
+            env_vars::ANCHOR_PREFIX,
+            config.anchor_prefix(),
+        )
+        .unwrap_or_default();
 
         let autonixdoc = AutoNixdoc::new(&prefix, &anchor_prefix, self.input_dir.clone(), mapping);
         self.run_in_path(&autonixdoc, &config, &behaviors, &self.input_dir)
     }
 
-    fn initialize_logging(&self) {
-        if let Some(level) = self.logging_level {
-            env_logger::builder().filter_level(level).init();
+    fn initialize_logging(&self, logging_level: Option<LogLevel>) {
+        if let Some(level) = logging_level {
+            env_logger::builder().filter_level(level.into()).init();
         } else {
             env_logger::init();
         }

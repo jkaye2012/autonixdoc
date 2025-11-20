@@ -1,9 +1,10 @@
 //! Handlers for invocation of external `nixdoc` commands.
 
 use std::{
+    ffi::OsStr,
     fs::File,
     io::{BufRead, BufReader},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::{Command, Stdio},
 };
 
@@ -141,7 +142,7 @@ impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
 
         let file_stem = relative_path
             .file_stem()
-            .and_then(std::ffi::OsStr::to_str)
+            .and_then(OsStr::to_str)
             .with_context(|| "source path had no file name")?;
 
         let parent_components: Vec<&str> = relative_path
@@ -149,7 +150,7 @@ impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
             .map(|p| {
                 p.components()
                     .filter_map(|c| {
-                        if let std::path::Component::Normal(os_str) = c {
+                        if let Component::Normal(os_str) = c {
                             os_str.to_str()
                         } else {
                             None
@@ -226,12 +227,19 @@ impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
 mod tests {
     use anyhow::{Result, anyhow};
     use std::{
-        ffi::OsStr, fs, os::unix::ffi::OsStrExt, os::unix::fs::PermissionsExt, path::PathBuf,
+        ffi::OsStr,
+        fs,
+        os::unix::ffi::OsStrExt,
+        os::unix::fs::PermissionsExt,
+        path::PathBuf,
     };
     use tempfile::TempDir;
 
     use super::*;
-    use crate::mapping::{AutoMapping, PathMapping};
+    use crate::{
+        cli::{FailureBehavior, LogLevel},
+        mapping::{AutoMapping, BaselineConfig, PathMapping},
+    };
 
     /// Test utility for setting up temporary directories
     fn setup_test_dirs() -> (TempDir, PathBuf, PathBuf) {
@@ -364,10 +372,28 @@ mod tests {
 
     #[test]
     fn test_nixdoc_execute_path_mapping_failure() {
+        #[derive(Default, serde::Deserialize)]
+        struct FailingMapperConfig;
+
+        impl BaselineConfig for FailingMapperConfig {
+            fn failure_behavior(&self) -> Option<FailureBehavior> {
+                None
+            }
+            fn prefix(&self) -> Option<String> {
+                None
+            }
+            fn anchor_prefix(&self) -> Option<String> {
+                None
+            }
+            fn logging_level(&self) -> Option<LogLevel> {
+                None
+            }
+        }
+
         struct FailingMapper;
 
         impl PathMapping for FailingMapper {
-            type Config = ();
+            type Config = FailingMapperConfig;
 
             fn resolve(&self, _config: &Self::Config, _path: &Path) -> Result<PathAction> {
                 Err(anyhow!("Mock path mapping failure"))
@@ -398,7 +424,7 @@ mod tests {
             .build();
 
         let command = nixdoc.into_command();
-        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+        let args: Vec<&OsStr> = command.get_args().collect();
         let program = command.get_program();
 
         assert_eq!(program, "nixdoc");
@@ -421,7 +447,7 @@ mod tests {
             .build();
 
         let command = nixdoc.into_command();
-        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+        let args: Vec<&OsStr> = command.get_args().collect();
 
         assert_eq!(args.len(), 8);
         assert_eq!(args[6], "--prefix");
@@ -438,7 +464,7 @@ mod tests {
             .build();
 
         let command = nixdoc.into_command();
-        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+        let args: Vec<&OsStr> = command.get_args().collect();
 
         assert_eq!(args.len(), 8);
         assert_eq!(args[6], "--anchor-prefix");
@@ -456,7 +482,7 @@ mod tests {
             .build();
 
         let command = nixdoc.into_command();
-        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+        let args: Vec<&OsStr> = command.get_args().collect();
 
         assert_eq!(args.len(), 10);
         assert_eq!(args[0], "--category");
@@ -480,7 +506,7 @@ mod tests {
             .build();
 
         let command = nixdoc.into_command();
-        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+        let args: Vec<&OsStr> = command.get_args().collect();
 
         assert_eq!(args.len(), 6);
         assert_eq!(args[1], "");
@@ -497,7 +523,7 @@ mod tests {
             .build();
 
         let command: Command = nixdoc.into();
-        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+        let args: Vec<&OsStr> = command.get_args().collect();
 
         assert_eq!(command.get_program(), "nixdoc");
         assert_eq!(args[1], "trait-test");

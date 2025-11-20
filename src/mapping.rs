@@ -8,7 +8,26 @@ use std::{
 use anyhow::{Context, Result};
 use serde::{Deserialize, de::DeserializeOwned};
 
-use crate::cli::MappingType;
+use crate::cli::{FailureBehavior, LogLevel, MappingType};
+
+/// Baseline configuration that all PathMapping configurations should implement.
+///
+/// This trait provides optional fields for user-configurable values that can be
+/// set via configuration files, environment variables, or CLI arguments. The
+/// priority order is: CLI arguments > environment variables > configuration file values.
+pub trait BaselineConfig {
+    /// Returns the failure behavior configured in this configuration, if any.
+    fn failure_behavior(&self) -> Option<FailureBehavior>;
+
+    /// Returns the prefix configured in this configuration, if any.
+    fn prefix(&self) -> Option<String>;
+
+    /// Returns the anchor prefix configured in this configuration, if any.
+    fn anchor_prefix(&self) -> Option<String>;
+
+    /// Returns the logging level configured in this configuration, if any.
+    fn logging_level(&self) -> Option<LogLevel>;
+}
 
 /// Actions that can be performed with a mapped path.
 ///
@@ -27,7 +46,7 @@ pub enum PathAction {
 /// Path mapping allows implementation of different strategies for documentation
 /// structure.
 pub trait PathMapping {
-    type Config: Default + DeserializeOwned;
+    type Config: Default + DeserializeOwned + BaselineConfig;
 
     fn resolve(&self, config: &Self::Config, nix_path: &Path) -> Result<PathAction>;
 }
@@ -81,7 +100,34 @@ impl<'a> AutoMapping<'a> {
 
 #[derive(Default, Deserialize)]
 pub struct AutoMappingConfig {
+    /// Paths to ignore during documentation generation
     pub ignore_paths: HashSet<PathBuf>,
+    /// Failure behavior configuration
+    pub failure_behavior: Option<FailureBehavior>,
+    /// Prefix for generated identifiers
+    pub prefix: Option<String>,
+    /// Prefix for anchor links
+    pub anchor_prefix: Option<String>,
+    /// Logging level configuration as string (info, warn, error)
+    pub logging_level: Option<String>,
+}
+
+impl BaselineConfig for AutoMappingConfig {
+    fn failure_behavior(&self) -> Option<FailureBehavior> {
+        self.failure_behavior
+    }
+
+    fn prefix(&self) -> Option<String> {
+        self.prefix.clone()
+    }
+
+    fn anchor_prefix(&self) -> Option<String> {
+        self.anchor_prefix.clone()
+    }
+
+    fn logging_level(&self) -> Option<LogLevel> {
+        self.logging_level.as_ref().and_then(|s| s.parse().ok())
+    }
 }
 
 impl<'a> PathMapping for AutoMapping<'a> {
@@ -372,5 +418,67 @@ mod tests {
             normal_result,
             PathAction::OutputTo(PathBuf::from("/output/deep/nested/normal.md"))
         );
+    }
+
+    #[test]
+    fn test_baseline_config_default_values() {
+        let config = AutoMappingConfig::default();
+
+        assert_eq!(config.failure_behavior(), None);
+        assert_eq!(config.prefix(), None);
+        assert_eq!(config.anchor_prefix(), None);
+        assert_eq!(config.logging_level(), None);
+    }
+
+    #[test]
+    fn test_baseline_config_with_values() {
+        let mut config = AutoMappingConfig::default();
+        config.failure_behavior = Some(FailureBehavior::Abort);
+        config.prefix = Some("test-prefix".to_string());
+        config.anchor_prefix = Some("test-anchor".to_string());
+        config.logging_level = Some("info".to_string());
+
+        assert_eq!(config.failure_behavior(), Some(FailureBehavior::Abort));
+        assert_eq!(config.prefix(), Some("test-prefix".to_string()));
+        assert_eq!(config.anchor_prefix(), Some("test-anchor".to_string()));
+        assert_eq!(config.logging_level(), Some(LogLevel(log::LevelFilter::Info)));
+    }
+
+    #[test]
+    fn test_baseline_config_logging_level_parsing() {
+        let test_cases = vec![
+            ("error", LogLevel(log::LevelFilter::Error)),
+            ("warn", LogLevel(log::LevelFilter::Warn)),
+            ("info", LogLevel(log::LevelFilter::Info)),
+            ("debug", LogLevel(log::LevelFilter::Debug)),
+            ("trace", LogLevel(log::LevelFilter::Trace)),
+            ("ERROR", LogLevel(log::LevelFilter::Error)),
+            ("WARN", LogLevel(log::LevelFilter::Warn)),
+        ];
+
+        for (input, expected) in test_cases {
+            let mut config = AutoMappingConfig::default();
+            config.logging_level = Some(input.to_string());
+
+            assert_eq!(
+                config.logging_level(),
+                Some(expected),
+                "Failed for input: {}",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn test_baseline_config_none_logging_level() {
+        let config = AutoMappingConfig {
+            ignore_paths: HashSet::new(),
+            failure_behavior: None,
+            prefix: None,
+            anchor_prefix: None,
+            logging_level: None,
+        };
+
+        assert_eq!(config.logging_level(), None);
     }
 }

@@ -104,3 +104,8 @@ use the words "struct", "function", and "trait"; never "class", "method", or "in
 
 When making changes, add comments only if they are explaining _why_ something is done. Comments that
 say _what_ code does are not useful. When in doubt, do not add a comment.
+
+When adding or using dependencies from other modules, always import those dependencies at the
+"highest" possible level (e.g. at the module level for `mod tests`). Prefer imports over
+fully-qualified definitions other than in situations where it's directly idiomatic to use the
+qualifications.
