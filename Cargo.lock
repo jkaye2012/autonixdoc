@@ -99,6 +99,7 @@ dependencies = [
  "ignore",
  "log",
  "predicates",
+ "regex",
  "serde",
  "tempfile",
  "toml",

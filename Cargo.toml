@@ -11,6 +11,7 @@ clap = { version = "4.5.47", features = ["derive"] }
 env_logger = "0.11.8"
 ignore = "0.4"
 log = "0.4.28"
+regex = "1.12.2"
 serde = { version = "1.0.227", features = ["derive"] }
 toml = { version = "0.9.7", features = ["parse", "serde"] }
 typed-builder = "0.21.2"

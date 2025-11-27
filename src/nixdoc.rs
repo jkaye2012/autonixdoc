@@ -227,11 +227,7 @@ impl<'a, M: PathMapping> AutoNixdoc<'a, M> {
 mod tests {
     use anyhow::{Result, anyhow};
     use std::{
-        ffi::OsStr,
-        fs,
-        os::unix::ffi::OsStrExt,
-        os::unix::fs::PermissionsExt,
-        path::PathBuf,
+        ffi::OsStr, fs, os::unix::ffi::OsStrExt, os::unix::fs::PermissionsExt, path::PathBuf,
     };
     use tempfile::TempDir;
 

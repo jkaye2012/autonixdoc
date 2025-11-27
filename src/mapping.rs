@@ -441,7 +441,10 @@ mod tests {
         assert_eq!(config.failure_behavior(), Some(FailureBehavior::Abort));
         assert_eq!(config.prefix(), Some("test-prefix".to_string()));
         assert_eq!(config.anchor_prefix(), Some("test-anchor".to_string()));
-        assert_eq!(config.logging_level(), Some(LogLevel(log::LevelFilter::Info)));
+        assert_eq!(
+            config.logging_level(),
+            Some(LogLevel(log::LevelFilter::Info))
+        );
     }
 
     #[test]

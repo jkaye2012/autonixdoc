@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use ignore::Walk;
 use log::{LevelFilter, error, info};
+use regex::Regex;
 
 use crate::{
     mapping::{BaselineConfig, PathMapping, get_mapping},
@@ -68,9 +69,7 @@ impl std::str::FromStr for FailureBehavior {
             "abort" => Ok(Self::Abort),
             "log" => Ok(Self::Log),
             "skip" => Ok(Self::Skip),
-            _ => {
-                Err(format!("Unknown failure behavior: {}", s))
-            }
+            _ => Err(format!("Unknown failure behavior: {}", s)),
         }
     }
 }
@@ -123,6 +122,10 @@ pub struct Driver {
     /// Prefix for anchor links in the generated documentation
     #[arg(short = 'a', long)]
     anchor_prefix: Option<String>,
+
+    /// Regular expression pattern for identifying files to process
+    #[arg(long)]
+    regex_pattern: Option<String>,
 }
 
 // TODO: Implement another mapper to demonstrate how it works
@@ -152,6 +155,49 @@ fn resolve_with_config<T: std::str::FromStr + Clone>(
         .or(config_value)
 }
 
+/// Strategy for identifying which files should be processed for documentation.
+#[derive(Debug, Clone)]
+pub enum PathIdentification {
+    /// Files ending in ".nix"
+    NixExtension,
+    /// Files matching a user-provided regular expression
+    Regex(Regex),
+}
+
+impl Default for PathIdentification {
+    fn default() -> Self {
+        Self::NixExtension
+    }
+}
+
+impl PathIdentification {
+    /// Creates a PathIdentification strategy from an optional regex pattern.
+    ///
+    /// If pattern is provided, creates a Regex variant with the compiled regex.
+    /// If pattern is None, creates the default Extension variant.
+    fn from_pattern(pattern: Option<String>) -> Result<Self> {
+        match pattern {
+            Some(pattern) => {
+                let regex = Regex::new(&pattern)
+                    .with_context(|| format!("Invalid regex pattern: {}", pattern))?;
+                Ok(Self::Regex(regex))
+            }
+            None => Ok(Self::NixExtension),
+        }
+    }
+
+    /// Determines if a file should be processed based on the identification strategy.
+    fn should_process(&self, path: &Path) -> bool {
+        match self {
+            Self::NixExtension => path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext == "nix")
+                .unwrap_or(false),
+            Self::Regex(regex) => regex.is_match(&path.to_string_lossy()),
+        }
+    }
+}
 
 mod env_vars {
     pub const CONFIG: &'static str = "AUTONIXDOC_CONFIG";
@@ -159,17 +205,20 @@ mod env_vars {
     pub const PREFIX: &'static str = "AUTONIXDOC_PREFIX";
     pub const ANCHOR_PREFIX: &'static str = "AUTONIXDOC_ANCHOR_PREFIX";
     pub const LOGGING_LEVEL: &'static str = "AUTONIXDOC_LOGGING_LEVEL";
+    pub const REGEX_PATTERN: &'static str = "AUTONIXDOC_REGEX_PATTERN";
 }
 
 struct Behaviors {
     on_failure: FailureBehavior,
+    path_identification: PathIdentification,
 }
 
 impl Behaviors {
-    fn new(on_failure: Option<FailureBehavior>) -> Self {
-        Self {
+    fn new(on_failure: Option<FailureBehavior>, regex_pattern: Option<String>) -> Result<Self> {
+        Ok(Self {
             on_failure: on_failure.unwrap_or_default(),
-        }
+            path_identification: PathIdentification::from_pattern(regex_pattern)?,
+        })
     }
 }
 
@@ -191,7 +240,9 @@ impl Driver {
             env_vars::ON_FAILURE,
             config.failure_behavior(),
         );
-        let behaviors = Behaviors::new(failure_behavior);
+
+        let regex_pattern = resolve_option(self.regex_pattern.clone(), env_vars::REGEX_PATTERN);
+        let behaviors = Behaviors::new(failure_behavior, regex_pattern)?;
 
         let logging_level = resolve_with_config(
             self.logging_level,
@@ -277,11 +328,7 @@ impl Driver {
                 },
             };
 
-            if !path.is_dir()
-                && let Some(ex) = path.extension()
-                && ex.to_str() == Some("nix")
-            // TODO: path identification strategy?
-            {
+            if !path.is_dir() && behaviors.path_identification.should_process(&path) {
                 info!("Generating documentation for {}", path.display());
                 let exec_result = autonixdoc.execute(config, &path);
                 if let Err(e) = exec_result {
@@ -311,5 +358,119 @@ impl Driver {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_path_identification_extension_default() {
+        let identification = PathIdentification::default();
+        assert!(matches!(identification, PathIdentification::NixExtension));
+    }
+
+    #[test]
+    fn test_path_identification_from_pattern_none() {
+        let identification = PathIdentification::from_pattern(None).unwrap();
+        assert!(matches!(identification, PathIdentification::NixExtension));
+    }
+
+    #[test]
+    fn test_path_identification_from_pattern_some() {
+        let identification = PathIdentification::from_pattern(Some(r"\.rs$".to_string())).unwrap();
+        assert!(matches!(identification, PathIdentification::Regex(_)));
+    }
+
+    #[test]
+    fn test_path_identification_from_pattern_invalid_regex() {
+        let result = PathIdentification::from_pattern(Some("[".to_string()));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid regex pattern")
+        );
+    }
+
+    #[test]
+    fn test_path_identification_extension_should_process_nix() {
+        let identification = PathIdentification::NixExtension;
+        let path = PathBuf::from("/path/to/file.nix");
+        assert!(identification.should_process(&path));
+    }
+
+    #[test]
+    fn test_path_identification_extension_should_not_process_other() {
+        let identification = PathIdentification::NixExtension;
+        let path = PathBuf::from("/path/to/file.rs");
+        assert!(!identification.should_process(&path));
+    }
+
+    #[test]
+    fn test_path_identification_extension_should_not_process_no_extension() {
+        let identification = PathIdentification::NixExtension;
+        let path = PathBuf::from("/path/to/file");
+        assert!(!identification.should_process(&path));
+    }
+
+    #[test]
+    fn test_path_identification_regex_should_process_matching() {
+        let regex = Regex::new(r"\.rs$").unwrap();
+        let identification = PathIdentification::Regex(regex);
+        let path = PathBuf::from("/path/to/file.rs");
+        assert!(identification.should_process(&path));
+    }
+
+    #[test]
+    fn test_path_identification_regex_should_not_process_non_matching() {
+        let regex = Regex::new(r"\.rs$").unwrap();
+        let identification = PathIdentification::Regex(regex);
+        let path = PathBuf::from("/path/to/file.nix");
+        assert!(!identification.should_process(&path));
+    }
+
+    #[test]
+    fn test_path_identification_regex_complex_pattern() {
+        let regex = Regex::new(r".*/(lib|src)/.*\.nix$").unwrap();
+        let identification = PathIdentification::Regex(regex);
+
+        let path1 = PathBuf::from("/project/lib/module.nix");
+        let path2 = PathBuf::from("/project/src/utils.nix");
+        let path3 = PathBuf::from("/project/docs/readme.nix");
+
+        assert!(identification.should_process(&path1));
+        assert!(identification.should_process(&path2));
+        assert!(!identification.should_process(&path3));
+    }
+
+    #[test]
+    fn test_behaviors_new_with_extension_default() {
+        let behaviors = Behaviors::new(None, None).unwrap();
+        assert_eq!(behaviors.on_failure, FailureBehavior::Log);
+        assert!(matches!(
+            behaviors.path_identification,
+            PathIdentification::NixExtension
+        ));
+    }
+
+    #[test]
+    fn test_behaviors_new_with_regex_pattern() {
+        let behaviors =
+            Behaviors::new(Some(FailureBehavior::Abort), Some(r"\.rs$".to_string())).unwrap();
+        assert_eq!(behaviors.on_failure, FailureBehavior::Abort);
+        assert!(matches!(
+            behaviors.path_identification,
+            PathIdentification::Regex(_)
+        ));
+    }
+
+    #[test]
+    fn test_behaviors_new_with_invalid_regex() {
+        let result = Behaviors::new(None, Some("[".to_string()));
+        assert!(result.is_err());
     }
 }

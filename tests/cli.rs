@@ -1,4 +1,7 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use assert_cmd::Command;
 use assert_cmd::cargo::cargo_bin_cmd;
@@ -47,7 +50,7 @@ fn test_successful_documentation_generation() {
 
     create_nix_file(
         &input_dir,
-        "test.nix",
+        "test1.nix",
         "# A test function\n{ lib }: { hello = \"world\"; }",
     );
 
@@ -61,7 +64,7 @@ fn test_successful_documentation_generation() {
 
     cmd.assert().success();
 
-    let expected_output_file = output_dir.join("test.md");
+    let expected_output_file = output_dir.join("test1.md");
     assert!(
         expected_output_file.exists(),
         "Expected output file {:?} does not exist",
@@ -265,7 +268,7 @@ fn test_failure_behavior_abort() {
 fn test_default_failure_behavior() {
     let (_temp_dir, input_dir, output_dir) = create_test_directory();
 
-    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+    create_nix_file(&input_dir, "test2.nix", "{ lib }: { hello = \"world\"; }");
 
     let mut cmd = cli_command();
     cmd.arg("--input-dir")
@@ -275,7 +278,7 @@ fn test_default_failure_behavior() {
 
     cmd.assert().code(predicate::in_iter([0, 1]));
 
-    let expected_output_file = output_dir.join("test.md");
+    let expected_output_file = output_dir.join("test2.md");
     if expected_output_file.exists() {
         let file_content =
             fs::read_to_string(&expected_output_file).expect("Failed to read output file");
@@ -293,7 +296,7 @@ fn test_config_file_provided() {
     let config_path = _temp_dir.path().join("custom.toml");
     fs::write(&config_path, "ignore_paths = []").expect("Failed to write config");
 
-    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+    create_nix_file(&input_dir, "test3.nix", "{ lib }: { hello = \"world\"; }");
 
     let mut cmd = cli_command();
     cmd.arg("--input-dir")
@@ -381,7 +384,7 @@ fn test_environment_variable_config_resolution() {
     let config_path = _temp_dir.path().join("env_config.toml");
     fs::write(&config_path, "ignore_paths = []").expect("Failed to write config");
 
-    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+    create_nix_file(&input_dir, "test3.nix", "{ lib }: { hello = \"world\"; }");
 
     let mut cmd = cli_command();
     cmd.env(
@@ -402,7 +405,7 @@ fn test_environment_variable_config_resolution() {
 fn test_environment_variable_failure_behavior() {
     let (_temp_dir, input_dir, output_dir) = create_test_directory();
 
-    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+    create_nix_file(&input_dir, "test4.nix", "{ lib }: { hello = \"world\"; }");
 
     let mut cmd = cli_command();
     cmd.env("AUTONIXDOC_ON_FAILURE", "skip")
@@ -544,7 +547,7 @@ fn test_help_flag() {
 fn test_prefix_cli_arguments() {
     let (_temp_dir, input_dir, output_dir) = create_test_directory();
 
-    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+    create_nix_file(&input_dir, "test5.nix", "{ lib }: { hello = \"world\"; }");
 
     let mut cmd = cli_command();
     cmd.arg("--input-dir")
@@ -560,7 +563,7 @@ fn test_prefix_cli_arguments() {
 
     cmd.assert().success();
 
-    let expected_output_file = output_dir.join("test.md");
+    let expected_output_file = output_dir.join("test5.md");
     assert!(
         expected_output_file.exists(),
         "Expected output file {:?} does not exist",
@@ -572,7 +575,7 @@ fn test_prefix_cli_arguments() {
 fn test_prefix_environment_variables() {
     let (_temp_dir, input_dir, output_dir) = create_test_directory();
 
-    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+    create_nix_file(&input_dir, "test6.nix", "{ lib }: { hello = \"world\"; }");
 
     let mut cmd = cli_command();
     cmd.env("AUTONIXDOC_PREFIX", "env.")
@@ -586,7 +589,7 @@ fn test_prefix_environment_variables() {
 
     cmd.assert().success();
 
-    let expected_output_file = output_dir.join("test.md");
+    let expected_output_file = output_dir.join("test6.md");
     assert!(
         expected_output_file.exists(),
         "Expected output file {:?} does not exist",
@@ -598,7 +601,7 @@ fn test_prefix_environment_variables() {
 fn test_prefix_cli_overrides_environment() {
     let (_temp_dir, input_dir, output_dir) = create_test_directory();
 
-    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+    create_nix_file(&input_dir, "test7.nix", "{ lib }: { hello = \"world\"; }");
 
     let mut cmd = cli_command();
     cmd.env("AUTONIXDOC_PREFIX", "env.")
@@ -616,7 +619,7 @@ fn test_prefix_cli_overrides_environment() {
 
     cmd.assert().success();
 
-    let expected_output_file = output_dir.join("test.md");
+    let expected_output_file = output_dir.join("test7.md");
     assert!(
         expected_output_file.exists(),
         "Expected output file {:?} does not exist",
@@ -638,7 +641,7 @@ logging_level = "info"
     let config_path = _temp_dir.path().join("baseline.toml");
     fs::write(&config_path, config_content).expect("Failed to write config");
 
-    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+    create_nix_file(&input_dir, "test8.nix", "{ lib }: { hello = \"world\"; }");
 
     let mut cmd = cli_command();
     cmd.arg("--input-dir")
@@ -650,7 +653,7 @@ logging_level = "info"
 
     cmd.assert().success();
 
-    let expected_output_file = output_dir.join("test.md");
+    let expected_output_file = output_dir.join("test8.md");
     assert!(
         expected_output_file.exists(),
         "Expected output file {:?} does not exist",
@@ -671,7 +674,7 @@ anchor_prefix = "config-anchor"
     let config_path = _temp_dir.path().join("override.toml");
     fs::write(&config_path, config_content).expect("Failed to write config");
 
-    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+    create_nix_file(&input_dir, "test9.nix", "{ lib }: { hello = \"world\"; }");
 
     let mut cmd = cli_command();
     cmd.arg("--input-dir")
@@ -689,7 +692,7 @@ anchor_prefix = "config-anchor"
 
     cmd.assert().success();
 
-    let expected_output_file = output_dir.join("test.md");
+    let expected_output_file = output_dir.join("test9.md");
     assert!(
         expected_output_file.exists(),
         "Expected output file {:?} does not exist",
@@ -710,7 +713,7 @@ anchor_prefix = "config-anchor"
     let config_path = _temp_dir.path().join("env_override.toml");
     fs::write(&config_path, config_content).expect("Failed to write config");
 
-    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+    create_nix_file(&input_dir, "test10.nix", "{ lib }: { hello = \"world\"; }");
 
     let mut cmd = cli_command();
     cmd.env("AUTONIXDOC_PREFIX", "env-prefix")
@@ -725,10 +728,224 @@ anchor_prefix = "config-anchor"
 
     cmd.assert().success();
 
-    let expected_output_file = output_dir.join("test.md");
+    let expected_output_file = output_dir.join("test10.md");
     assert!(
         expected_output_file.exists(),
         "Expected output file {:?} does not exist",
         expected_output_file
+    );
+}
+
+#[test]
+fn test_regex_pattern_cli_argument() {
+    let (_temp_dir, input_dir, output_dir) = create_test_directory();
+
+    // Create test files with different extensions
+    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+    create_nix_file(&input_dir, "other.rs", "fn main() {}");
+    create_nix_file(&input_dir, "config.toml", "[package]");
+
+    let mut cmd = cli_command();
+    cmd.arg("--input-dir")
+        .arg(&input_dir)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg("--regex-pattern")
+        .arg(r".*\.(nix|rs)$")
+        .arg("--on-failure")
+        .arg("log");
+
+    cmd.assert().success();
+
+    // Should process both .nix and .rs files
+    let expected_nix_file = output_dir.join("test.md");
+    let expected_rs_file = output_dir.join("other.md");
+    let expected_toml_file = output_dir.join("config.md");
+
+    assert!(
+        expected_nix_file.exists(),
+        "Expected .nix file to be processed"
+    );
+    assert!(
+        expected_rs_file.exists(),
+        "Expected .rs file to be processed"
+    );
+    assert!(
+        !expected_toml_file.exists(),
+        "Expected .toml file to be ignored"
+    );
+}
+
+#[test]
+fn test_regex_pattern_environment_variable() {
+    let (_temp_dir, input_dir, output_dir) = create_test_directory();
+
+    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+    create_nix_file(&input_dir, "other.txt", "plain text");
+
+    let mut cmd = cli_command();
+    cmd.env("AUTONIXDOC_REGEX_PATTERN", r".*\.nix$")
+        .arg("--input-dir")
+        .arg(&input_dir)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg("--on-failure")
+        .arg("log");
+
+    cmd.assert().success();
+
+    let expected_nix_file = output_dir.join("test.md");
+    let expected_txt_file = output_dir.join("other.md");
+
+    assert!(
+        expected_nix_file.exists(),
+        "Expected .nix file to be processed"
+    );
+    assert!(
+        !expected_txt_file.exists(),
+        "Expected .txt file to be ignored"
+    );
+}
+
+#[test]
+fn test_regex_pattern_invalid_pattern() {
+    let (_temp_dir, input_dir, output_dir) = create_test_directory();
+
+    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+
+    let mut cmd = cli_command();
+    cmd.arg("--input-dir")
+        .arg(&input_dir)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg("--regex-pattern")
+        .arg("[") // Invalid regex
+        .arg("--on-failure")
+        .arg("log");
+
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid regex pattern"));
+}
+
+#[test]
+fn test_cli_overrides_environment_regex_pattern() {
+    let (_temp_dir, input_dir, output_dir) = create_test_directory();
+
+    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+    create_nix_file(&input_dir, "other.rs", "fn main() {}");
+
+    let mut cmd = cli_command();
+    cmd.env("AUTONIXDOC_REGEX_PATTERN", r".*\.rs$") // Env says .rs files
+        .arg("--input-dir")
+        .arg(&input_dir)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg("--regex-pattern")
+        .arg(r".*\.nix$") // CLI says .nix files (should take precedence)
+        .arg("--on-failure")
+        .arg("log");
+
+    cmd.assert().success();
+
+    let expected_nix_file = output_dir.join("test.md");
+    let expected_rs_file = output_dir.join("other.md");
+
+    assert!(
+        expected_nix_file.exists(),
+        "Expected .nix file to be processed (CLI should override env var)"
+    );
+    assert!(
+        !expected_rs_file.exists(),
+        "Expected .rs file to be ignored (CLI should override env var)"
+    );
+}
+
+#[test]
+fn test_regex_pattern_complex_directory_structure() {
+    let (_temp_dir, input_dir, output_dir) = create_test_directory();
+
+    let lib_dir = input_dir.join("lib");
+    let src_dir = input_dir.join("src");
+    let doc_dir = input_dir.join("doc");
+    fs::create_dir_all(&lib_dir).expect("Failed to create lib directory");
+    fs::create_dir_all(&src_dir).expect("Failed to create src directory");
+    fs::create_dir_all(&doc_dir).expect("Failed to create doc directory");
+
+    create_nix_file(&lib_dir, "utils.nix", "{ lib }: { util = true; }");
+    create_nix_file(&src_dir, "main.nix", "{ lib }: { main = true; }");
+    create_nix_file(&doc_dir, "readme.nix", "{ lib }: { doc = true; }");
+
+    let mut cmd = cli_command();
+    cmd.arg("--input-dir")
+        .arg(&input_dir)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg("--regex-pattern")
+        .arg(r".*/(?:lib|src)/.*\.nix$") // Only lib and src directories
+        .arg("--on-failure")
+        .arg("log");
+
+    cmd.assert().success();
+
+    let expected_lib_file = output_dir.join("lib").join("utils.md");
+    let expected_src_file = output_dir.join("src").join("main.md");
+    let expected_doc_file = output_dir.join("doc").join("readme.md");
+
+    assert!(
+        expected_lib_file.exists(),
+        "Expected lib file to be processed"
+    );
+    assert!(
+        expected_src_file.exists(),
+        "Expected src file to be processed"
+    );
+    assert!(
+        !expected_doc_file.exists(),
+        "Expected doc file to be ignored"
+    );
+}
+
+#[test]
+fn test_default_behavior_unchanged() {
+    let (_temp_dir, input_dir, output_dir) = create_test_directory();
+
+    create_nix_file(&input_dir, "test.nix", "{ lib }: { hello = \"world\"; }");
+    create_nix_file(&input_dir, "other.rs", "fn main() {}");
+
+    let mut cmd = cli_command();
+    cmd.arg("--input-dir")
+        .arg(&input_dir)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg("--on-failure")
+        .arg("log");
+
+    cmd.assert().success();
+
+    let expected_nix_file = output_dir.join("test.md");
+    let expected_rs_file = output_dir.join("other.md");
+
+    // Only .nix file should be processed by default
+    assert!(
+        expected_nix_file.exists(),
+        "Expected .nix file to be processed by default"
+    );
+    assert!(
+        !expected_rs_file.exists(),
+        "Expected .rs file to be ignored by default"
+    );
+
+    // Check that only one file was processed by examining directory contents
+    let output_entries: Vec<_> = fs::read_dir(&output_dir)
+        .expect("Failed to read output directory")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to collect directory entries");
+
+    assert_eq!(
+        output_entries.len(),
+        1,
+        "Should only process .nix files by default, found {} files",
+        output_entries.len()
     );
 }
